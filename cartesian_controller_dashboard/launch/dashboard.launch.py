@@ -26,6 +26,15 @@ _FALLBACKS = {
     "controller_name":     "cartesian_force_controller",
     "wrench_topic":        "/ft_sensor/wrench_compensated",
     "joint_states_topic":  "/joint_states",
+    # TCP pose display: dashboard looks up ``base_frame -> tool_frame``
+    # via TF.  Defaults match the node's own declared defaults (which
+    # historically targeted the Duco arm).  Override in
+    # ``cartesian_controller_dashboard:`` of your per-robot
+    # ``robot_config.<robot>.yaml`` -- e.g. UR15 sets
+    # ``base_frame: base_link`` and ``tool_frame: tool0`` because its
+    # URDF has no ``compliance_link``.
+    "base_frame":          "base_link",
+    "tool_frame":          "compliance_link",
     "aux_frames_section":  "",
     "service_timeout_sec": 2.0,
     "host":                "0.0.0.0",
