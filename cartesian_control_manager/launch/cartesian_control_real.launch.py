@@ -55,10 +55,20 @@ def generate_launch_description() -> LaunchDescription:
         for name, value in _CONSERVATIVE_OVERRIDES.items()
     ]
 
+    # ``instance_name`` is forwarded verbatim to the included launch so
+    # the real-hardware profile works for multi-instance setups too.
+    # Default empty -> legacy single-instance behaviour.
+    args.append(DeclareLaunchArgument(
+        "instance_name", default_value="",
+        description="Optional dual-arm instance identifier "
+                    "(e.g. 'left' / 'right'); forwarded to "
+                    "cartesian_control.launch.py."))
+
     overrides = {
         name: LaunchConfiguration(name)
         for name in _CONSERVATIVE_OVERRIDES.keys()
     }
+    overrides["instance_name"] = LaunchConfiguration("instance_name")
 
     log = LogInfo(msg=(
         "[cartesian_control_manager] REAL-HARDWARE profile: "
