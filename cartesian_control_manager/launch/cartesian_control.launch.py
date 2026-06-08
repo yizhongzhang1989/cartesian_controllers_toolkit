@@ -177,6 +177,27 @@ def _bool(v):
     return str(v).lower()
 
 
+def _coerce(value: str, like):
+    """Coerce a CLI launch-arg string back to the type of ``like``.
+
+    ``LaunchConfiguration.perform()`` always yields a string, but the
+    orchestrator node declares each parameter with a typed default
+    (bool / int / float / str).  Passing an overridden value through as a
+    raw string makes rclpy raise ``InvalidParameterTypeException`` (e.g.
+    ``max_wrench_force`` declared DOUBLE but given STRING ``'100.0'``).
+    This casts the string back so CLI overrides -- and the conservative
+    string overrides forwarded by ``cartesian_control_real.launch.py`` --
+    keep the parameter's declared type.
+    """
+    if isinstance(like, bool):
+        return str(value).strip().lower() in ("1", "true", "yes", "on")
+    if isinstance(like, int) and not isinstance(like, bool):
+        return int(value)
+    if isinstance(like, float):
+        return float(value)
+    return value
+
+
 # Keys that the orchestrator node does NOT consume directly; they're only
 # read by the launch file itself (either to find the FZI YAML or to drive
 # the instance-naming logic).
@@ -265,7 +286,7 @@ def generate_launch_description() -> LaunchDescription:
             legacy_default = _bool(d[key]) if isinstance(fallback, bool) \
                 else str(d[key])
             if cli_value != legacy_default:
-                parameters[key] = cli_value
+                parameters[key] = _coerce(cli_value, fallback)
             else:
                 parameters[key] = section_defaults.get(key, fallback)
 
