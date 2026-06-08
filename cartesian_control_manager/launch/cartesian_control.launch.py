@@ -1,7 +1,7 @@
 """Launch the Cartesian-control orchestrator + spawn FZI's controllers (inactive).
 
 Defaults are loaded from ``config/robot_config.yaml`` under
-``cartesian_control_manager:`` (via the ``common`` package) when present,
+``cartesian_control_manager:`` (via the ``cct_common`` package) when present,
 with hard-coded fallbacks so the launch still works on a fresh checkout.
 
 The launch spawns each FZI Cartesian controller plugin into the live
@@ -139,16 +139,16 @@ def _defaults(section_name: str = "cartesian_control_manager"):
     human-readable provenance for the launch log.  Falls back to
     ``_FALLBACKS`` (with a description of why) whenever:
 
-    * the ``common`` package cannot be imported,
+    * the ``cct_common`` package cannot be imported,
     * the config file cannot be loaded,
     * the requested section is absent (with a further fallback to the
       legacy ``cartesian_control_manager:`` section before giving up).
     """
     try:
-        from common.config_manager import get_config  # type: ignore
+        from cct_common.config_manager import get_config  # type: ignore
     except Exception as exc:  # noqa: BLE001
         return (dict(_FALLBACKS),
-                f"FALLBACK (could not import common.config_manager: "
+                f"FALLBACK (could not import cct_common.config_manager: "
                 f"{type(exc).__name__}: {exc})")
     try:
         cfg = get_config()

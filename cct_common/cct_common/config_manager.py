@@ -6,7 +6,7 @@ singleton. Values are accessed by dot-path strings.
 
 Typical use::
 
-    from common.config_manager import get_config
+    from cct_common.config_manager import get_config
 
     cfg = get_config()
     topic   = cfg.get("cartesian_control_manager.wrench_topic",

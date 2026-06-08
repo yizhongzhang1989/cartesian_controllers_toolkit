@@ -1,10 +1,14 @@
-# `common`
+# `cct_common`
 
 Centralized configuration loader and workspace utilities for the
-**duco_control** project. Every other package in this workspace should
-read its parameters through `common.config_manager.ConfigManager` so
+**cartesian_controllers_toolkit**. Every other package in the toolkit should
+read its parameters through `cct_common.config_manager.ConfigManager` so
 there is exactly one source of truth (`config/robot_config.yaml`) for
 IPs, ports, device paths, robot kinematics, etc.
+
+> Named `cct_common` (cartesian_controllers_toolkit common) rather than
+> `common` so the toolkit can be added to any workspace as a git submodule
+> without its support package colliding with a host package named `common`.
 
 ## Why a centralized config?
 
@@ -31,8 +35,8 @@ duco_control/
 │   ├── robot_config.example.yaml   (committed, the template)
 │   └── robot_config.yaml           (LOCAL only, gitignored)
 └── src/
-    └── common/                     (this package)
-        └── common/
+    └── cct_common/                 (this package)
+        └── cct_common/
             ├── config_manager.py
             └── workspace_utils.py
 ```
@@ -55,7 +59,7 @@ You can also point at an explicit file with the
 ## Using it from Python (drivers, nodes, scripts)
 
 ```python
-from common.config_manager import get_config
+from cct_common.config_manager import get_config
 
 cfg = get_config()                          # singleton; cheap to call
 print(cfg.config_path)                      # which YAML was loaded
@@ -88,7 +92,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-from common.config_manager import get_config
+from cct_common.config_manager import get_config
 
 def generate_launch_description():
     cfg = get_config().section("duco_ft_sensor")
@@ -102,11 +106,11 @@ def generate_launch_description():
 
 ## Workspace utilities
 
-`common.workspace_utils` finds the project root and standard sub-dirs
+`cct_common.workspace_utils` finds the project root and standard sub-dirs
 without baking in any user-specific path.
 
 ```python
-from common.workspace_utils import (
+from cct_common.workspace_utils import (
     get_workspace_root,    # absolute path to the repo root, or None
     get_config_dir,        # <root>/config
     get_temp_dir,          # <root>/temp  (created on demand)
@@ -131,11 +135,11 @@ and `config/`.
 
 ```bash
 cd ~/Documents/duco_control
-colcon build --symlink-install --packages-select common
+colcon build --symlink-install --packages-select cct_common
 source install/setup.bash
 ```
 
-After sourcing, any other package can `from common.config_manager
+After sourcing, any other package can `from cct_common.config_manager
 import get_config`.
 
 ## YAML conventions
@@ -156,6 +160,6 @@ import get_config`.
 (usually only in dev/REPL), call:
 
 ```python
-from common.config_manager import get_config
+from cct_common.config_manager import get_config
 get_config().reload()
 ```

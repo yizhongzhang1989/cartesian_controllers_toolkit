@@ -1,7 +1,7 @@
 """Launch the gravity-compensation node + its web dashboard.
 
 Defaults are taken from ``config/robot_config.yaml`` under
-``ft_sensor_gravity_compensation`` (via the ``common`` package). CLI overrides
+``ft_sensor_gravity_compensation`` (via the ``cct_common`` package). CLI overrides
 win.
 
 Examples:
@@ -47,10 +47,10 @@ def _defaults():
     operators can see whether the central config was honoured.
     """
     try:
-        from common.config_manager import get_config  # type: ignore
+        from cct_common.config_manager import get_config  # type: ignore
     except Exception as exc:  # noqa: BLE001
         return (dict(_FALLBACKS),
-                f"FALLBACK (could not import common.config_manager: "
+                f"FALLBACK (could not import cct_common.config_manager: "
                 f"{type(exc).__name__}: {exc})")
     try:
         cfg = get_config()

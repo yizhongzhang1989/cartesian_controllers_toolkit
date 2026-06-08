@@ -11,7 +11,7 @@ URDF, joints, sensor topics, and the FZI YAML preset.
 
 | package | purpose | runtime port |
 |---|---|---|
-| `common` | centralised config loader (`config/robot_config.yaml`) and shared XML / URDF helpers | -- |
+| `cct_common` | centralised config loader (`config/robot_config.yaml`) and shared XML / URDF helpers. Named `cct_common` so the toolkit drops into any workspace as a submodule without colliding with a host `common` package | -- |
 | `cartesian_control_manager` | spawns FZI's `cartesian_force_controller` / `cartesian_motion_controller` / `cartesian_compliance_controller` (all inactive), relays the wrench, publishes a zero `target_wrench` heartbeat, exposes engage / disengage `Trigger` services and runs a safety supervisor | -- |
 | `cartesian_controller_dashboard` | optional FastAPI web UI: engage / disengage, controller selection, live gain tuning, optional tool-frame editing | `8120` |
 | `ft_sensor_gravity_compensation` | subscribes to a raw wrench topic + `/tf`, publishes a gravity-compensated wrench, ships its own calibration UI | `8100` |

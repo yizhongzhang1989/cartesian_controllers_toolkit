@@ -45,7 +45,7 @@ def get_workspace_root() -> Optional[str]:
     # 2. walk up from an installed package's share dir
     try:
         from ament_index_python.packages import get_package_share_directory
-        for pkg in ("common",
+        for pkg in ("cct_common",
                     "cartesian_control_manager",
                     "ft_sensor_gravity_compensation",
                     "ft_sensor_dashboard"):

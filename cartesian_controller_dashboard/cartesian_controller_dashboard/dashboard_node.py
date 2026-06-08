@@ -56,15 +56,15 @@ from std_msgs.msg import String
 from std_srvs.srv import Trigger
 from tf2_ros import Buffer, TransformException, TransformListener
 
-# `common.config_manager` exposes the project's robot_config.yaml.  The
+# `cct_common.config_manager` exposes the project's robot_config.yaml.  The
 # dashboard's "Tool frames" editor reads `<bringup>.aux_frames`
 # from the resolved config and writes back via the line-based
 # `save_aux_frames` helper (which preserves comments).  Imported with a
 # soft fallback so the dashboard still starts in environments where
-# `common` is not on the PYTHONPATH (the API simply returns a clear
+# `cct_common` is not on the PYTHONPATH (the API simply returns a clear
 # error in that case).
 try:
-    from common.config_manager import (  # type: ignore
+    from cct_common.config_manager import (  # type: ignore
         get_config as _get_config,
         read_aux_frames as _read_aux_frames,
         save_aux_frames as _save_aux_frames,
@@ -76,13 +76,13 @@ except Exception as _exc:  # noqa: BLE001
     _save_aux_frames = None  # type: ignore
     _COMMON_IMPORT_ERROR = f"{type(_exc).__name__}: {_exc}"
 
-# ``common.urdf_loader.update_aux_frames`` rewrites the
+# ``cct_common.urdf_loader.update_aux_frames`` rewrites the
 # ``<origin>`` of existing aux-frame joints in a URDF string, returning
 # a new URDF that can be pushed to ``robot_state_publisher`` via
 # SetParameters for live tool-frame updates.  Soft-imported for the
-# same reason as ``common.config_manager`` above.
+# same reason as ``cct_common.config_manager`` above.
 try:
-    from common.urdf_loader import (  # type: ignore
+    from cct_common.urdf_loader import (  # type: ignore
         update_aux_frames as _update_aux_frames,
     )
     _URDF_LOADER_IMPORT_ERROR: Optional[str] = None
@@ -2102,7 +2102,7 @@ class DashboardNode(Node):
     # xyz / rpy of each aux_frame (e.g. ft_sensor_link, compliance_link)
     # without editing YAML by hand.  Changes are persisted to
     # ``config/robot_config.yaml`` via the line-targeted
-    # ``common.config_manager.save_aux_frames`` helper which preserves
+    # ``cct_common.config_manager.save_aux_frames`` helper which preserves
     # comments and unrelated keys; they take effect on the next robot
     # bringup.  The top-level YAML key that owns the list is set by
     # the ``aux_frames_section`` parameter (per-robot configuration).
@@ -2115,7 +2115,7 @@ class DashboardNode(Node):
         """Return the current aux_frames list as on disk."""
         if _get_config is None or _read_aux_frames is None:
             raise RuntimeError(
-                "common.config_manager not importable: "
+                "cct_common.config_manager not importable: "
                 f"{_COMMON_IMPORT_ERROR}")
         if not self._aux_frames_section:
             raise RuntimeError(
@@ -2155,7 +2155,7 @@ class DashboardNode(Node):
         """
         if _save_aux_frames is None or _get_config is None:
             raise RuntimeError(
-                "common.config_manager not importable: "
+                "cct_common.config_manager not importable: "
                 f"{_COMMON_IMPORT_ERROR}")
         if not self._aux_frames_section:
             raise RuntimeError(
@@ -2266,7 +2266,7 @@ class DashboardNode(Node):
         if _update_aux_frames is None or _read_aux_frames is None:
             return {
                 "ok":    False,
-                "error": ("common.urdf_loader not "
+                "error": ("cct_common.urdf_loader not "
                           f"importable: {_URDF_LOADER_IMPORT_ERROR}"),
             }
 

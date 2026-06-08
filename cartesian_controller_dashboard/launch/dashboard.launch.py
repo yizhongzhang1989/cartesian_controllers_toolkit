@@ -1,7 +1,7 @@
 """Launch the cartesian-controller web dashboard.
 
 Defaults are loaded from ``config/robot_config.yaml`` under
-``cartesian_controller_dashboard:`` (via the ``common`` package) when
+``cartesian_controller_dashboard:`` (via the ``cct_common`` package) when
 present, with hard-coded fallbacks so the launch still works on a
 fresh checkout.
 
@@ -44,10 +44,10 @@ _FALLBACKS = {
 
 def _defaults():
     try:
-        from common.config_manager import get_config  # type: ignore
+        from cct_common.config_manager import get_config  # type: ignore
     except Exception as exc:  # noqa: BLE001
         return (dict(_FALLBACKS),
-                f"FALLBACK (could not import common.config_manager: "
+                f"FALLBACK (could not import cct_common.config_manager: "
                 f"{type(exc).__name__}: {exc})")
     try:
         cfg = get_config()
