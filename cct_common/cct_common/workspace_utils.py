@@ -8,7 +8,7 @@ colcon ``install/`` overlay.
 The project root is found by, in order:
 
   1. The ``ROBOT_WORKSPACE_ROOT`` environment variable (explicit
-     override).  ``DUCO_CONTROL_ROOT`` is accepted as a legacy alias.
+     override).
   2. Walking up from a known installed share dir (``ament_index``).
   3. Walking up from this file's own location (development case).
   4. ``COLCON_PREFIX_PATH`` / ``ROS_WORKSPACE``.
@@ -33,10 +33,8 @@ def _looks_like_root(path: Path) -> bool:
 def get_workspace_root() -> Optional[str]:
     """Return the absolute path of the consuming workspace root, or None."""
 
-    # 1. explicit env var override (ROBOT_WORKSPACE_ROOT preferred;
-    #    DUCO_CONTROL_ROOT accepted as a legacy alias).
-    env = os.environ.get("ROBOT_WORKSPACE_ROOT") or \
-        os.environ.get("DUCO_CONTROL_ROOT")
+    # 1. explicit env var override.
+    env = os.environ.get("ROBOT_WORKSPACE_ROOT")
     if env:
         p = Path(env).expanduser().resolve()
         if _looks_like_root(p):

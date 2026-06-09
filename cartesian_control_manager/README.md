@@ -38,11 +38,15 @@ and calls the engage/disengage services exposed here.
    the topic configured via `wrench_topic` and republishes it onto
    each FZI controller's RELIABLE input
    `/<controller>/ft_sensor_wrench`.
-3. **Publishes** a `WrenchStamped` at `fzi_target_rate_hz` on
-   `/<controller>/target_wrench` for the force + compliance
+3. **Publishes** (optionally) a `WrenchStamped` at `fzi_target_rate_hz`
+   on `/<controller>/target_wrench` for the force + compliance
    controllers.  FZI's controller minimises `(target - measured)`, so
    an identically zero target drives the operator-applied wrench to
-   zero -- pure free-drive / hand-guidance.
+   zero -- pure free-drive / hand-guidance.  This heartbeat is gated by
+   `publish_target_wrench` (default `false`): when off, the manager
+   leaves the `target_wrench` topics silent so an external publisher
+   (teleop / skill node) can own them.  Toggle it live from the
+   dashboard or via `ros2 param set`.
 4. **Exposes** `~/engage` and `~/disengage` `Trigger` services.
    Engage atomically deactivates the JTC named by
    `fzi_jtc_controller_name` and activates the FZI controller named

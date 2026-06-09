@@ -4,6 +4,7 @@ __pycache__/
 *.pyo
 *.egg-info/
 .eggs/
+.pytest_cache/
 
 # colcon build artifacts (toolkit packages should never be built in-place;
 # build them from the consuming workspace's build/install/log dirs)

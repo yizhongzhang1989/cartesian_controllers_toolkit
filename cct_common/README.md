@@ -30,12 +30,14 @@ launch invocation. With one YAML file:
 ## Repo layout
 
 ```
-duco_control/
+<your_workspace>/
 ├── config/
 │   ├── robot_config.example.yaml   (committed, the template)
 │   └── robot_config.yaml           (LOCAL only, gitignored)
 └── src/
     └── cct_common/                 (this package)
+        ├── config/
+        │   └── toolkit_defaults.yaml   (packaged default; the built-in fallback)
         └── cct_common/
             ├── config_manager.py
             └── workspace_utils.py
@@ -48,11 +50,28 @@ cp config/robot_config.example.yaml config/robot_config.yaml
 ${EDITOR:-nano} config/robot_config.yaml
 ```
 
-If `robot_config.yaml` is missing, `ConfigManager` falls back to the
-example file so the workspace still launches with sensible defaults.
+## Config resolution order
 
-You can also point at an explicit file with the
-`DUCO_CONTROL_CONFIG=/abs/path/robot_config.yaml` environment variable.
+`ConfigManager` loads the **first** source that exists, in this order:
+
+1. **A user-specified file** — the `ROBOT_CONFIG_PATH` environment
+   variable (absolute path; `DUCO_CONTROL_CONFIG` is accepted as a
+   legacy alias).
+2. **The workspace config** — `<workspace>/config/robot_config.yaml`,
+   or `robot_config.example.yaml` if the former is absent.
+3. **The toolkit's packaged default** — `toolkit_defaults.yaml`, shipped
+   inside this package under `cct_common/config/`. This centralises the
+   default ports / topics / frames / limits for every toolkit package so
+   they are no longer hard-coded in each launch file.
+
+If even the packaged default can't be read (e.g. `cct_common` isn't built
+yet), each launch file falls back to the hard-coded `_FALLBACKS` dict it
+carries as a final safety net.
+
+> **Customising for your robot:** don't edit the packaged default. Copy
+> the sections you need into your workspace's `config/robot_config.yaml`
+> (wins via step 2), or point `ROBOT_CONFIG_PATH` at your own file
+> (wins via step 1).
 
 ---
 
@@ -65,17 +84,17 @@ cfg = get_config()                          # singleton; cheap to call
 print(cfg.config_path)                      # which YAML was loaded
 
 # dot-path access with a default
-port = cfg.get("duco_ft_sensor.port",       "/dev/ttyUSB0")
-baud = cfg.get("duco_ft_sensor.baud",       460800)
-web  = cfg.get("ft_sensor_dashboard.port",  8080)
+topic   = cfg.get("ft_sensor_gravity_compensation.input_topic", "/ft_sensor/wrench_raw")
+gravity = cfg.get("ft_sensor_gravity_compensation.gravity",     9.80665)
+web     = cfg.get("ft_sensor_dashboard.port",                   8080)
 
 # scoped view: handy to pass into a sub-component
-ft = cfg.section("duco_ft_sensor")          # SectionView
-print(ft.get("frame_id"))                   # "ft_sensor_link"
+ft = cfg.section("ft_sensor_gravity_compensation")  # SectionView
+print(ft.get("sensor_frame"))                       # "tool0"
 
 # introspect
-cfg.list_sections()                         # ['duco_ft_sensor', 'ft_sensor_dashboard']
-cfg.has("duco_ft_sensor.tare_on_start")     # True
+cfg.list_sections()                                 # ['ft_sensor_gravity_compensation', 'ft_sensor_dashboard']
+cfg.has("ft_sensor_gravity_compensation.gravity")   # True
 ```
 
 `get(...)` always returns the supplied `default` if any segment of the
@@ -95,11 +114,11 @@ from launch_ros.actions import Node
 from cct_common.config_manager import get_config
 
 def generate_launch_description():
-    cfg = get_config().section("duco_ft_sensor")
+    cfg = get_config().section("ft_sensor_gravity_compensation")
     args = [
-        DeclareLaunchArgument("port",     default_value=cfg.get("port", "/dev/ttyUSB0")),
-        DeclareLaunchArgument("baud",     default_value=str(cfg.get("baud", 460800))),
-        DeclareLaunchArgument("frame_id", default_value=cfg.get("frame_id", "ft_sensor_link")),
+        DeclareLaunchArgument("input_topic",  default_value=cfg.get("input_topic", "/ft_sensor/wrench_raw")),
+        DeclareLaunchArgument("sensor_frame", default_value=cfg.get("sensor_frame", "tool0")),
+        DeclareLaunchArgument("gravity",      default_value=str(cfg.get("gravity", 9.80665))),
     ]
     return LaunchDescription([*args, Node(...)])
 ```
@@ -119,12 +138,10 @@ from cct_common.workspace_utils import (
 
 The root is located by trying, in order:
 
-1. the `DUCO_CONTROL_ROOT` env var,
+1. the `ROBOT_WORKSPACE_ROOT` env var,
 2. the share directory of any installed package in this workspace,
 3. walking up from this file's location (development case),
-4. `COLCON_PREFIX_PATH` / `ROS_WORKSPACE`,
-5. fallback well-known locations
-   (`~/Documents/duco_control`, `~/duco_control`).
+4. `COLCON_PREFIX_PATH` / `ROS_WORKSPACE`.
 
 A directory qualifies as the project root if it contains both `src/`
 and `config/`.
@@ -134,7 +151,7 @@ and `config/`.
 ## Building
 
 ```bash
-cd ~/Documents/duco_control
+cd <your_workspace>
 colcon build --symlink-install --packages-select cct_common
 source install/setup.bash
 ```

@@ -42,11 +42,11 @@ Examples::
     ros2 launch cartesian_control_manager cartesian_control.launch.py \\
         active_controller_name:=cartesian_compliance_controller
     ros2 launch cartesian_control_manager cartesian_control.launch.py \\
-        fzi_controller_yaml_package:=ur_robot_bringup \\
+        fzi_controller_yaml_package:=my_robot_bringup \\
         fzi_controller_yaml_relpath:=config/fzi_preset.yaml
     ros2 launch cartesian_control_manager cartesian_control.launch.py \\
         instance_name:=left \\
-        fzi_controller_yaml_package:=g1_bringup \\
+        fzi_controller_yaml_package:=my_robot_bringup \\
         fzi_controller_yaml_relpath:=config/fzi_preset.yaml
 """
 
@@ -88,8 +88,8 @@ _FALLBACKS = {
     "engaged_default":       False,
     # FZI controller wiring ------------------------------------------------
     # Default JTC name 'joint_trajectory_controller' matches ros2_control's
-    # convention; per-robot configs override (Duco uses 'arm_1_controller',
-    # UR uses 'scaled_joint_trajectory_controller').
+    # convention; per-robot configs override it (e.g. 'arm_1_controller'
+    # or 'scaled_joint_trajectory_controller').
     "active_controller_name":  "cartesian_force_controller",
     "fzi_jtc_controller_name": "joint_trajectory_controller",
     "fzi_target_frame":        "tool0",
@@ -97,9 +97,11 @@ _FALLBACKS = {
     "fzi_service_timeout_sec": 2.0,
     # FZI controller YAML location.  Resolved at launch time as
     # ``get_package_share_directory(<package>) / <relpath>``.
-    # Each per-robot bringup package ships its own preset.
-    "fzi_controller_yaml_package": "duco_robot_bringup",
-    "fzi_controller_yaml_relpath": "config/fzi_preset.yaml",
+    # Default points at the toolkit's OWN robot-neutral example preset so
+    # a fresh checkout resolves cleanly; each robot overrides these with
+    # the preset shipped by its own bringup package.
+    "fzi_controller_yaml_package": "cartesian_control_manager",
+    "fzi_controller_yaml_relpath": "config/fzi_preset.example.yaml",
     # target_wrench setpoint published by the heartbeat (fallback when
     # no external publisher is active).  Interpreted by FZI in the
     # end-effector frame (hand_frame_control:=true, default), or the
@@ -120,6 +122,12 @@ _FALLBACKS = {
     # above takes over via the heartbeat.  Empty = disabled.
     "external_target_wrench_topic":       "",
     "external_target_wrench_timeout_sec": 0.2,
+    # master enable for the orchestrator's target_wrench output.  When
+    # False (default) the heartbeat AND the external-topic forwarding
+    # are both NO-OPs, leaving the FZI controllers' target_wrench topics
+    # silent for an external publisher to own.  Live-tunable via the
+    # dashboard's "Send target_wrench" toggle.
+    "publish_target_wrench":   False,
     # supervisor + state publish ------------------------------------------
     "loop_rate_hz":            50.0,
     "state_publish_rate_hz":   5.0,

@@ -1,0 +1,164 @@
+# =============================================================================
+# FZI Cartesian controllers -- ROBOT-NEUTRAL preset TEMPLATE.
+#
+# This is a starting point you COPY into your own robot's bringup
+# package and edit. The robot-agnostic ``cartesian_control_manager``
+# resolves the preset at launch time via its
+# ``fzi_controller_yaml_package`` / ``fzi_controller_yaml_relpath``
+# launch arguments, e.g.::
+#
+#     ros2 launch cartesian_control_manager cartesian_control.launch.py \
+#         fzi_controller_yaml_package:=my_robot_bringup \
+#         fzi_controller_yaml_relpath:=config/fzi_preset.yaml
+#
+# The manager pre-loads all three FZI controller plugins (force /
+# motion / compliance, all inactive) and switches whichever is selected
+# with the JointTrajectoryController on engage. controller_manager loads
+# this file once per spawner and picks the section keyed by the
+# controller's own node name -- so this file MUST contain one top-level
+# section per spawned controller name.
+#
+# -----------------------------------------------------------------------------
+# WHAT YOU MUST EDIT FOR A NEW ROBOT
+# -----------------------------------------------------------------------------
+#   1. ``joints:``           -> your arm's 6 (or N) joint names, in chain
+#                               order, exactly as they appear in the URDF
+#                               that controller_manager sees.
+#   2. ``robot_base_link:``  -> the URDF link the chain starts at
+#                               (often ``base_link``).
+#   3. ``end_effector_link:``-> the URDF link the controller drives. If
+#                               you add an aux ``compliance_link`` /
+#                               ``tool0`` via robot_config.yaml aux_frames,
+#                               name it here; otherwise use your flange
+#                               link (e.g. ``tool0``).
+#   4. ``ft_sensor_ref_link:`` (force/compliance only) -> the URDF frame
+#                               the F/T measurement is expressed in. Must
+#                               exist in the KDL chain.
+#   5. ``pd_gains`` / ``stiffness`` -> start with these conservative
+#                               values and tune live (see notes below).
+#
+# All of links 2-4 must exist in the URDF; if you append aux frames
+# (ft_sensor_link / compliance_link) declare them under
+# ``config/robot_config.yaml::<your_bringup>.aux_frames`` so your
+# bringup appends them to the robot_description at launch.
+#
+# -----------------------------------------------------------------------------
+# TUNING NOTES (short version)
+# -----------------------------------------------------------------------------
+#   * pd_gains.*.p  : per-axis forward gain (tracking bandwidth). Raise
+#                     until ringing starts, then back off.
+#   * pd_gains.*.d  : damps de/dt of the wrench error. Needed under pure
+#                     force control against a rigid surface to stop
+#                     contact bounce. Rule of thumb: d ~ p/40 (trans),
+#                     d ~ p/10 (rot). Leave 0 for motion control.
+#   * solver.error_scale : unitless multiplier on the Cartesian input;
+#                     lower it to slow/soften the loop (start 0.05 for
+#                     force/compliance, 1.0 for motion).
+#   * stiffness.*   : (compliance only) the spring the arm projects on
+#                     its environment. N/m for trans, Nm/rad for rot.
+#                     This -- not pd_gains.p -- is what the operator
+#                     feels. Lower = closer to free-drive.
+# Everything here is live-tunable:
+#   ros2 param set /<controller_name> pd_gains.trans_x.p <value>
+# or from the cartesian_controller_dashboard UI.
+# =============================================================================
+
+# --- Force controller ----------------------------------------------------
+# Minimises (target_wrench - ft_sensor_wrench). With the manager
+# publishing target_wrench = 0 (or staying silent, the default), this is
+# pure free-drive / hand guidance driven by the F/T sensor.
+cartesian_force_controller:
+  ros__parameters:
+    end_effector_link: "tool0"            # EDIT: your driven link
+    robot_base_link: "base_link"          # EDIT: chain root link
+    ft_sensor_ref_link: "ft_sensor_link"  # EDIT: frame the F/T is in
+    joints:                               # EDIT: your joint names, in order
+      - joint_1
+      - joint_2
+      - joint_3
+      - joint_4
+      - joint_5
+      - joint_6
+    command_interfaces:
+      - position
+    solver:
+      error_scale: 0.05      # integration step (s); FZI default 1.0
+      iterations: 5
+      publish_state_feedback: true
+    pd_gains:
+      trans_x: {p: 5.0,  d: 0.05}
+      trans_y: {p: 5.0,  d: 0.05}
+      trans_z: {p: 5.0,  d: 0.05}
+      rot_x:   {p: 50.0, d: 5.0}
+      rot_y:   {p: 50.0, d: 5.0}
+      rot_z:   {p: 50.0, d: 5.0}
+
+# --- Motion controller ---------------------------------------------------
+# Drives the end-effector toward a target_frame (PoseStamped on
+# /<controller>/target_frame). On activate it snapshots the current
+# pose, so with no external publisher it simply holds pose.
+cartesian_motion_controller:
+  ros__parameters:
+    end_effector_link: "tool0"            # EDIT: keep identical to above
+    robot_base_link: "base_link"          # EDIT: keep identical to above
+    joints:                               # EDIT: keep identical to above
+      - joint_1
+      - joint_2
+      - joint_3
+      - joint_4
+      - joint_5
+      - joint_6
+    command_interfaces:
+      - position
+    solver:
+      error_scale: 1.0       # FZI default
+      iterations: 5
+      publish_state_feedback: true
+    pd_gains:
+      trans_x: {p: 5.0}
+      trans_y: {p: 5.0}
+      trans_z: {p: 5.0}
+      rot_x:   {p: 50.0}
+      rot_y:   {p: 50.0}
+      rot_z:   {p: 50.0}
+
+# --- Compliance controller ----------------------------------------------
+# Motion + force combined: FZI computes
+#   net = stiffness * (target_frame - current_frame)
+#         + (target_wrench - measured_wrench)
+# and feeds that 6D wrench through the same pipeline as the force
+# controller. Mirror the force-controller pd_gains; ``stiffness.*`` is
+# the only genuinely compliance-specific knob (and the dominant one).
+cartesian_compliance_controller:
+  ros__parameters:
+    end_effector_link: "tool0"            # EDIT: keep identical to above
+    robot_base_link: "base_link"          # EDIT: keep identical to above
+    ft_sensor_ref_link: "ft_sensor_link"  # EDIT: keep identical to force ctl
+    compliance_ref_link: "tool0"          # EDIT: frame stiffness acts in
+    joints:                               # EDIT: keep identical to above
+      - joint_1
+      - joint_2
+      - joint_3
+      - joint_4
+      - joint_5
+      - joint_6
+    command_interfaces:
+      - position
+    stiffness:               # EDIT: dominant "rigid vs soft" knob
+      trans_x: 30.0          # N/m
+      trans_y: 30.0
+      trans_z: 30.0
+      rot_x: 2.0             # Nm/rad
+      rot_y: 2.0
+      rot_z: 2.0
+    solver:
+      error_scale: 0.05
+      iterations: 5
+      publish_state_feedback: true
+    pd_gains:
+      trans_x: {p: 1.0}
+      trans_y: {p: 1.0}
+      trans_z: {p: 1.0}
+      rot_x:   {p: 10.0}
+      rot_y:   {p: 10.0}
+      rot_z:   {p: 10.0}

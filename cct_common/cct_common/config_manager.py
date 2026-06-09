@@ -1,8 +1,11 @@
 """Centralized configuration loader for cartesian_controllers_toolkit.
 
-Reads ``config/robot_config.yaml`` (or, if missing, falls back to
-``config/robot_config.example.yaml``) once and caches it in a thread-safe
-singleton. Values are accessed by dot-path strings.
+Resolves and reads a single YAML config once, caching it in a thread-safe
+singleton.  The file is chosen by priority: a user-specified
+``ROBOT_CONFIG_PATH``, then the consuming workspace's
+``config/robot_config.yaml`` (or ``robot_config.example.yaml``), then the
+toolkit's packaged ``toolkit_defaults.yaml`` shipped inside this submodule.
+Values are accessed by dot-path strings.
 
 Typical use::
 
@@ -99,10 +102,51 @@ class SectionView:
 
 
 # ---------------------------------------------------------------------------
+# packaged default config (shipped inside the submodule)
+# ---------------------------------------------------------------------------
+# When neither an explicit ROBOT_CONFIG_PATH nor a workspace
+# config/robot_config.yaml is present, the toolkit loads this file so the
+# per-package defaults (ports, topics, frames, limits) live in ONE place
+# instead of being hard-coded in every launch file.
+_PACKAGED_DEFAULT_FILENAME = "toolkit_defaults.yaml"
+
+
+def _find_packaged_default_config() -> Optional[Path]:
+    """Return the path to the toolkit's packaged default config, or None.
+
+    Looks in the installed ``share/cct_common/config`` directory first (so
+    it resolves from a colcon overlay), then in the in-source
+    ``cct_common/config`` directory (development checkouts).
+    """
+    candidates: List[Path] = []
+    try:
+        from ament_index_python.packages import get_package_share_directory
+        share = Path(get_package_share_directory("cct_common"))
+        candidates.append(share / "config" / _PACKAGED_DEFAULT_FILENAME)
+    except Exception:  # noqa: BLE001  (ament missing / pkg not installed yet)
+        pass
+    # This file is <pkg>/cct_common/config_manager.py, so the packaged
+    # config lives two levels up under <pkg>/config/.
+    here = Path(__file__).resolve()
+    candidates.append(here.parent.parent / "config" / _PACKAGED_DEFAULT_FILENAME)
+    for c in candidates:
+        if c.is_file():
+            return c
+    return None
+
+
+# ---------------------------------------------------------------------------
 # config manager
 # ---------------------------------------------------------------------------
 class ConfigManager:
-    """Singleton loader for ``config/robot_config.yaml``."""
+    """Singleton loader for the toolkit configuration.
+
+    Resolves a single YAML file by priority -- a user-specified
+    ``ROBOT_CONFIG_PATH``, the consuming workspace's
+    ``config/robot_config.yaml``, or the toolkit's packaged
+    ``toolkit_defaults.yaml`` -- and caches it.  See
+    :meth:`_resolve_config_path` for the full order.
+    """
 
     _instance: Optional["ConfigManager"] = None
     _lock = threading.Lock()
@@ -133,11 +177,20 @@ class ConfigManager:
 
     # --- loading ----------------------------------------------------------
     def _resolve_config_path(self) -> Path:
-        """Find robot_config.yaml (preferred) or its .example fallback."""
-        # 1. explicit env override (ROBOT_CONFIG_PATH preferred;
-        #    DUCO_CONTROL_CONFIG accepted as a legacy alias).
-        env_path = os.environ.get("ROBOT_CONFIG_PATH") or \
-            os.environ.get("DUCO_CONTROL_CONFIG")
+        """Resolve the config file to load, by priority.
+
+        1. A **user-specified** file: the ``ROBOT_CONFIG_PATH`` env var.
+        2. The **consuming workspace's** ``config/robot_config.yaml``
+           (or ``robot_config.example.yaml`` if that is absent).
+        3. The toolkit's **packaged default** shipped inside this
+           submodule (``cct_common/config/toolkit_defaults.yaml``).
+
+        Raises :class:`ConfigError` only if even the packaged default
+        cannot be located; the launch files then fall back to their
+        hard-coded ``_FALLBACKS`` as a last resort.
+        """
+        # 1. explicit env override.
+        env_path = os.environ.get("ROBOT_CONFIG_PATH")
         if env_path:
             p = Path(env_path).expanduser().resolve()
             if p.is_file():
@@ -154,10 +207,19 @@ class ConfigManager:
                 if p.is_file():
                     return p
 
+        # 3. the toolkit's packaged default config (shipped in cct_common).
+        #    Centralises the per-package defaults so they are not
+        #    hard-coded in every launch file.
+        packaged = _find_packaged_default_config()
+        if packaged is not None:
+            return packaged
+
         raise ConfigError(
-            "no config/robot_config.yaml found. "
+            "no robot_config.yaml found and the packaged "
+            f"{_PACKAGED_DEFAULT_FILENAME!r} could not be located. "
             "Copy config/robot_config.example.yaml to config/robot_config.yaml, "
-            "or set ROBOT_CONFIG_PATH to an explicit path.")
+            "set ROBOT_CONFIG_PATH to an explicit path, or (re)build the "
+            "cct_common package so its default config is installed.")
 
     def _load(self) -> None:
         path = self._resolve_config_path()
@@ -291,8 +353,8 @@ def get_config() -> ConfigManager:
 # hand.
 #
 # The top-level YAML key that contains the ``aux_frames`` list is
-# robot-specific (e.g. ``duco_robot_bringup`` for the Duco workspace,
-# ``ur_robot_bringup`` for a UR workspace).  Callers pass it via the
+# robot-specific (each workspace's bringup package name, e.g.
+# ``my_robot_bringup``).  Callers pass it via the
 # ``top_key`` argument; there is no default so the toolkit does not
 # bake in any single robot's package name.
 _AUX_LIST_KEY = "aux_frames"
@@ -342,7 +404,7 @@ def save_aux_frames(file_path: str,
         not in this dict are left untouched.
     top_key:
         Name of the top-level YAML section that owns the
-        ``aux_frames`` list (e.g. ``"duco_robot_bringup"``).
+        ``aux_frames`` list (e.g. ``"my_robot_bringup"``).
 
     Returns
     -------
@@ -476,7 +538,7 @@ def read_aux_frames(file_path: str, top_key: str) -> List[Dict[str, Any]]:
         Absolute path to the YAML file to read.
     top_key:
         Name of the top-level YAML section that owns the
-        ``aux_frames`` list (e.g. ``"duco_robot_bringup"``).
+        ``aux_frames`` list (e.g. ``"my_robot_bringup"``).
     """
     p = Path(file_path)
     try:

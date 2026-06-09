@@ -1,4 +1,4 @@
-"""Build the canonical ``robot_description`` URDF for duco_robot_bringup.
+"""Build the canonical ``robot_description`` URDF for a robot bringup package.
 
 The wrapper runs ``xacro`` on the manufacturer's URDF at launch time and
 optionally appends auxiliary fixed-joint+link pairs (for example
@@ -59,7 +59,7 @@ def augment_urdf(urdf_xml: str,
 
         {
           "name":   "ft_sensor_link",
-          "parent": "link_6",
+          "parent": "tool0",
           "xyz":    [0.0, 0.0, 0.0],   # meters
           "rpy":    [0.0, 0.0, 0.0],   # radians
         }

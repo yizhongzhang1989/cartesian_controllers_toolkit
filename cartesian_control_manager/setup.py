@@ -14,6 +14,11 @@ setup(
             'launch/cartesian_control.launch.py',
             'launch/cartesian_control_real.launch.py',
         ]),
+        # Robot-neutral FZI preset template to copy into a new robot's
+        # bringup package (see the toolkit "Porting to a new robot" guide).
+        ('share/' + package_name + '/config', [
+            'config/fzi_preset.example.yaml',
+        ]),
     ],
     install_requires=['setuptools', 'numpy', 'pyyaml'],
     zip_safe=True,

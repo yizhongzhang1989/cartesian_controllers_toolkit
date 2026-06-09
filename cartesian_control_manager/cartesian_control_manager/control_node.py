@@ -150,7 +150,7 @@ _PARAM_DECLARATIONS: List[Tuple[str, object]] = [
     ("controller_kinds",       _DEFAULT_CONTROLLER_KINDS),
     ("active_controller_name", "cartesian_force_controller"),
     # Default JTC name follows ros2_control's convention; per-robot
-    # configs override (Duco uses 'arm_1_controller', UR uses
+    # configs override it (e.g. 'arm_1_controller' or
     # 'scaled_joint_trajectory_controller').
     ("fzi_jtc_controller_name", "joint_trajectory_controller"),
     ("fzi_target_frame",        "tool0"),

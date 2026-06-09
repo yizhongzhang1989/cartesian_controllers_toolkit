@@ -206,8 +206,7 @@ _BASE_TUNABLES: List[Tuple[str, str]] = [
     ("pd_gains.rot_z.p",   "double"),
     # D (damping of de/dt; sized against the spring loop for compliance,
     # against FT-sensor noise for the force controller -- see
-    # the per-robot fzi_preset.yaml header (e.g.
-    # src/duco_robot_bringup/config/fzi_preset.yaml).
+    # the per-robot fzi_preset.yaml header).
     ("pd_gains.trans_x.d", "double"),
     ("pd_gains.trans_y.d", "double"),
     ("pd_gains.trans_z.d", "double"),
@@ -621,21 +620,22 @@ class DashboardNode(Node):
         # be read (e.g. the controller node isn't running yet).  At
         # runtime ``api_jog`` and the TF-rate sampler resolve the
         # actual frames via ``_resolve_active_frames()`` so they
-        # automatically track whatever the FZI YAML configured.  The
-        # default ``compliance_link`` matches the EE tip declared in
-        # the per-robot ``fzi_preset.yaml`` and ``aux_frames`` in
-        # ``config/robot_config.yaml``; if the dashboard is launched
-        # before the controllers, jog will use these defaults until
-        # the parameters become available.
+        # automatically track whatever the FZI YAML configured.  These
+        # robot-neutral defaults (``base_link`` / ``tool0``) are only a
+        # backstop for a bare ``ros2 run`` before the controllers exist;
+        # per-robot setups set the real frames in the
+        # ``cartesian_controller_dashboard:`` section of
+        # ``config/robot_config.yaml`` (e.g. a robot with an aux tool
+        # tip names its ``compliance_link``).
         ("base_frame", "base_link"),
-        ("tool_frame", "compliance_link"),
+        ("tool_frame", "tool0"),
         ("service_timeout_sec", 2.0),
         # Top-level YAML key in ``robot_config.yaml`` whose
         # ``aux_frames`` list the dashboard's "Tool frames" panel
         # reads / writes.  Empty string disables the panel (the
         # API returns a clear error).  Per-robot workspaces should
         # set this to their bringup package name (e.g.
-        # ``duco_robot_bringup``).
+        # ``my_robot_bringup``).
         ("aux_frames_section", ""),
         # http -----------------------------------------------------------
         ("host", "0.0.0.0"),
@@ -1893,13 +1893,14 @@ class DashboardNode(Node):
     #
     # IMPORTANT: the FZI controllers interpret ``target_frame`` as the
     # target pose for *their own* ``end_effector_link`` parameter, NOT
-    # the dashboard's ``tool_frame``.  If we look up TF for ``link_6``
-    # but publish that as the target for a controller whose end-effector
-    # is ``compliance_link`` (offset ~33 cm along link_6's local Z),
-    # the controller treats the published pose as 33 cm displaced from
-    # where compliance_link currently sits -- the robot tries to close
-    # that gap regardless of which jog button was pressed, producing
-    # the classic "robot moves up whatever button I click" symptom.
+    # the dashboard's ``tool_frame``.  If we look up TF for the
+    # dashboard's ``tool_frame`` but publish that as the target for a
+    # controller whose ``end_effector_link`` is a different frame
+    # (offset along the tool axis), the controller treats the published
+    # pose as displaced from where its end-effector currently sits --
+    # the robot tries to close that gap regardless of which jog button
+    # was pressed, producing the classic "robot moves up whatever
+    # button I click" symptom.
     # We resolve the controller's actual ``end_effector_link`` (and
     # ``robot_base_link``) at jog time and use those frames for the
     # current-pose lookup so the delta is applied to the right tip.
