@@ -66,7 +66,7 @@ ros2 launch cartesian_controller_dashboard dashboard.launch.py \
 | `controller_name`     | `cartesian_force_controller` | name of the FZI controller node whose parameters are edited |
 | `wrench_topic`        | `/ft_sensor/wrench_compensated` | live wrench input |
 | `joint_states_topic`  | `/joint_states` | live joint-state freshness |
-| `aux_frames_section`  | `""` | top-level `robot_config.yaml` key whose `aux_frames` list backs the "Tool frames" panel (e.g. `duco_robot_bringup`); empty disables the panel |
+| `aux_frames_section`  | `""` | top-level `robot_config.yaml` key whose `aux_frames` list backs the "Tool frames" panel (e.g. `my_robot_bringup`); empty disables the panel |
 | `service_timeout_sec` | `2.0` | timeout for engage / disengage / parameter calls |
 | `host`, `port`        | `0.0.0.0`, `8120` | HTTP bind address |
 

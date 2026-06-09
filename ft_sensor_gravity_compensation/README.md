@@ -9,9 +9,11 @@ sensor frame are launch parameters.
               + `/tf` (`base_link` -> sensor frame, published by
               `robot_state_publisher` from the bringup launch)
 * **Output:** `geometry_msgs/WrenchStamped` on `/ft_sensor/wrench_compensated`
-* **Web dashboard (opt-in):** `http://<host>:8100/` -- launched only when
-  `enable_dashboard:=true` (or `enable_dashboard: true` under
-  `ft_sensor_gravity_compensation:` in `config/robot_config.yaml`)
+* **Web dashboard (opt-in):** `http://<host>:<dashboard_port>/` -- launched
+  only when `dashboard_port` is set to a positive port (e.g.
+  `dashboard_port:=8100`, or `dashboard_port: 8100` under
+  `ft_sensor_gravity_compensation:` in `config/robot_config.yaml`). Leave it
+  unset (or `0`) to run headless.
   * Manage multiple end-effector profiles
   * Record raw samples at varied poses
   * Run a least-squares calibration to fit `(mass, CoM, F_bias, T_bias)`
@@ -80,13 +82,14 @@ tool pointing down, then forward, then sideways.
 3. Launch the compensation node + dashboard:
 
        ros2 launch ft_sensor_gravity_compensation compensation.launch.py \
-           enable_dashboard:=true
+           dashboard_port:=8100
 
    The dashboard is **off by default** -- the node still publishes the
    compensated wrench using whichever profile is currently active in
-   `end_effectors.yaml`. Pass `enable_dashboard:=true` (or set
-   `enable_dashboard: true` under `ft_sensor_gravity_compensation:` in
-   `config/robot_config.yaml`) to bring up the calibration web UI.
+   `end_effectors.yaml`. Pass a positive `dashboard_port:=<port>` (or set
+   `dashboard_port: <port>` under `ft_sensor_gravity_compensation:` in
+   `config/robot_config.yaml`) to bring up the calibration web UI; leave it
+   unset (or `0`) to run headless.
 
 4. Open `http://localhost:8100/` and:
 
@@ -112,9 +115,8 @@ the very next incoming raw frame -- no relaunch needed.
 | `reliability`         | string  | `best_effort`                                                  |
 | `publish_when_no_tf`  | bool    | `false`                                                        |
 | `storage_path`        | string  | `~/.ros/ft_sensor_gravity_compensation/end_effectors.yaml`     |
-| `enable_dashboard`    | bool    | `false` (set `true` to launch the calibration web UI)          |
 | `host`                | string  | `0.0.0.0`                                                      |
-| `port`                | int     | `8100`                                                         |
+| `dashboard_port`      | int     | `0` (0 = dashboard disabled; set a positive port to enable it) |
 | `gravity`             | double  | `9.80665`                                                      |
 | `tf_timeout`          | double  | `0.05` (seconds, per `lookup_transform` call)                  |
 | `tf_max_age`          | double  | `1.0` (seconds before TF is considered stale and output stops) |

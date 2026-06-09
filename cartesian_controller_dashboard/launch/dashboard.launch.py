@@ -1,7 +1,7 @@
 """Launch the cartesian-controller web dashboard.
 
 Defaults are loaded from ``config/robot_config.yaml`` under
-``cartesian_controller_dashboard:`` (via the ``common`` package) when
+``cartesian_controller_dashboard:`` (via the ``cct_common`` package) when
 present, with hard-coded fallbacks so the launch still works on a
 fresh checkout.
 
@@ -26,6 +26,14 @@ _FALLBACKS = {
     "controller_name":     "cartesian_force_controller",
     "wrench_topic":        "/ft_sensor/wrench_compensated",
     "joint_states_topic":  "/joint_states",
+    # TCP pose display: dashboard looks up ``base_frame -> tool_frame``
+    # via TF.  Robot-neutral defaults (the ROS-Industrial ``base_link`` /
+    # ``tool0`` conventions).  Override in the
+    # ``cartesian_controller_dashboard:`` section of your
+    # ``config/robot_config.yaml`` -- e.g. a robot with an aux tool tip
+    # sets ``tool_frame: compliance_link`` (a frame added at bringup).
+    "base_frame":          "base_link",
+    "tool_frame":          "tool0",
     "aux_frames_section":  "",
     "service_timeout_sec": 2.0,
     "host":                "0.0.0.0",
@@ -35,10 +43,10 @@ _FALLBACKS = {
 
 def _defaults():
     try:
-        from common.config_manager import get_config  # type: ignore
+        from cct_common.config_manager import get_config  # type: ignore
     except Exception as exc:  # noqa: BLE001
         return (dict(_FALLBACKS),
-                f"FALLBACK (could not import common.config_manager: "
+                f"FALLBACK (could not import cct_common.config_manager: "
                 f"{type(exc).__name__}: {exc})")
     try:
         cfg = get_config()

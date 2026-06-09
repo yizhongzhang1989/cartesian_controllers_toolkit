@@ -1,14 +1,18 @@
 """Launch the gravity-compensation node + its web dashboard.
 
 Defaults are taken from ``config/robot_config.yaml`` under
-``ft_sensor_gravity_compensation`` (via the ``common`` package). CLI overrides
+``ft_sensor_gravity_compensation`` (via the ``cct_common`` package). CLI overrides
 win.
 
+The web dashboard is opt-in: it starts only when ``dashboard_port`` is a
+positive port. Leaving it unset (the default ``0``) runs headless.
+
 Examples:
+  # headless -- dashboard_port defaults to 0 (disabled)
   ros2 launch ft_sensor_gravity_compensation compensation.launch.py
+  # enable the calibration web UI on port 8100
   ros2 launch ft_sensor_gravity_compensation compensation.launch.py \\
-      enable_dashboard:=true
-  ros2 launch ft_sensor_gravity_compensation compensation.launch.py port:=8101
+      dashboard_port:=8100
   ros2 launch ft_sensor_gravity_compensation compensation.launch.py \\
       input_topic:=/ft_sensor/wrench_raw \\
       output_topic:=/ft_sensor/wrench_compensated \\
@@ -29,9 +33,10 @@ _FALLBACKS = {
     "reliability":  "best_effort",
     "publish_when_no_tf": False,
     "storage_path": "~/.ros/ft_sensor_gravity_compensation/end_effectors.yaml",
-    "enable_dashboard": False,
     "host": "0.0.0.0",
-    "port": 8100,
+    # dashboard_port: 0 disables the web dashboard; any positive port
+    # enables it (replaces the legacy enable_dashboard bool + port pair).
+    "dashboard_port": 0,
     "gravity": 9.80665,
     "tf_timeout": 0.05,
     "tf_max_age": 1.0,
@@ -47,10 +52,10 @@ def _defaults():
     operators can see whether the central config was honoured.
     """
     try:
-        from common.config_manager import get_config  # type: ignore
+        from cct_common.config_manager import get_config  # type: ignore
     except Exception as exc:  # noqa: BLE001
         return (dict(_FALLBACKS),
-                f"FALLBACK (could not import common.config_manager: "
+                f"FALLBACK (could not import cct_common.config_manager: "
                 f"{type(exc).__name__}: {exc})")
     try:
         cfg = get_config()
@@ -89,13 +94,13 @@ def generate_launch_description() -> LaunchDescription:
             description="if true, publish bias-only wrench when TF is stale"),
         DeclareLaunchArgument("storage_path", default_value=str(d["storage_path"])),
         DeclareLaunchArgument(
-            "enable_dashboard",
-            default_value=_launch_bool(d["enable_dashboard"]),
-            description="if true, start the embedded web dashboard on host:port"),
-        DeclareLaunchArgument(
             "host", default_value=str(d["host"]),
             description="HTTP bind address; 0.0.0.0 = LAN-visible"),
-        DeclareLaunchArgument("port", default_value=str(d["port"])),
+        DeclareLaunchArgument(
+            "dashboard_port", default_value=str(d["dashboard_port"]),
+            description="TCP port for the calibration web UI; 0 (the "
+                        "default) disables the dashboard. Set e.g. "
+                        "dashboard_port:=8100 to enable it."),
         DeclareLaunchArgument("gravity", default_value=str(d["gravity"])),
         DeclareLaunchArgument("tf_timeout", default_value=str(d["tf_timeout"])),
         DeclareLaunchArgument("tf_max_age", default_value=str(d["tf_max_age"])),
@@ -106,7 +111,7 @@ def generate_launch_description() -> LaunchDescription:
         f"defaults: input_topic={d['input_topic']} "
         f"output_topic={d['output_topic']} "
         f"world_frame={d['world_frame']} sensor_frame={d['sensor_frame']} "
-        f"enable_dashboard={d['enable_dashboard']} port={d['port']}"))
+        f"dashboard_port={d['dashboard_port']}"))
 
     node = Node(
         package="ft_sensor_gravity_compensation",
@@ -122,9 +127,8 @@ def generate_launch_description() -> LaunchDescription:
             "reliability":  LaunchConfiguration("reliability"),
             "publish_when_no_tf": LaunchConfiguration("publish_when_no_tf"),
             "storage_path": LaunchConfiguration("storage_path"),
-            "enable_dashboard": LaunchConfiguration("enable_dashboard"),
             "host":         LaunchConfiguration("host"),
-            "port":         LaunchConfiguration("port"),
+            "dashboard_port": LaunchConfiguration("dashboard_port"),
             "gravity":      LaunchConfiguration("gravity"),
             "tf_timeout":   LaunchConfiguration("tf_timeout"),
             "tf_max_age":   LaunchConfiguration("tf_max_age"),

@@ -8,7 +8,7 @@ colcon ``install/`` overlay.
 The project root is found by, in order:
 
   1. The ``ROBOT_WORKSPACE_ROOT`` environment variable (explicit
-     override).  ``DUCO_CONTROL_ROOT`` is accepted as a legacy alias.
+     override).
   2. Walking up from a known installed share dir (``ament_index``).
   3. Walking up from this file's own location (development case).
   4. ``COLCON_PREFIX_PATH`` / ``ROS_WORKSPACE``.
@@ -33,10 +33,8 @@ def _looks_like_root(path: Path) -> bool:
 def get_workspace_root() -> Optional[str]:
     """Return the absolute path of the consuming workspace root, or None."""
 
-    # 1. explicit env var override (ROBOT_WORKSPACE_ROOT preferred;
-    #    DUCO_CONTROL_ROOT accepted as a legacy alias).
-    env = os.environ.get("ROBOT_WORKSPACE_ROOT") or \
-        os.environ.get("DUCO_CONTROL_ROOT")
+    # 1. explicit env var override.
+    env = os.environ.get("ROBOT_WORKSPACE_ROOT")
     if env:
         p = Path(env).expanduser().resolve()
         if _looks_like_root(p):
@@ -45,7 +43,7 @@ def get_workspace_root() -> Optional[str]:
     # 2. walk up from an installed package's share dir
     try:
         from ament_index_python.packages import get_package_share_directory
-        for pkg in ("common",
+        for pkg in ("cct_common",
                     "cartesian_control_manager",
                     "ft_sensor_gravity_compensation",
                     "ft_sensor_dashboard"):

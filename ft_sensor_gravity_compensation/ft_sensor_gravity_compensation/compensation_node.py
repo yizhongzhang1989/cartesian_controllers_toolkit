@@ -32,7 +32,9 @@ Parameters
   storage_path      string  default "~/.ros/ft_sensor_gravity_compensation/"
                             "end_effectors.yaml"
   host              string  default "0.0.0.0"
-  port              int     default 8100
+  dashboard_port    int     default 0  -- TCP port for the calibration web
+                                          UI; 0 disables the dashboard, any
+                                          positive port enables it.
   gravity           double  default 9.80665
 """
 
@@ -1159,9 +1161,11 @@ class CompensationNode(Node):
         self.declare_parameter(
             "storage_path",
             "~/.ros/ft_sensor_gravity_compensation/end_effectors.yaml")
-        self.declare_parameter("enable_dashboard", False)
         self.declare_parameter("host", "0.0.0.0")
-        self.declare_parameter("port", 8100)
+        # dashboard_port: 0 (the default) disables the calibration web
+        # dashboard; any positive port enables it.  Replaces the legacy
+        # enable_dashboard bool + separate port parameter.
+        self.declare_parameter("dashboard_port", 0)
         self.declare_parameter("gravity", DEFAULT_GRAVITY)
         self.declare_parameter("tf_timeout", 0.05)        # sec, per lookup
         self.declare_parameter("tf_max_age", 1.0)         # sec, before tf considered stale
@@ -1217,9 +1221,11 @@ class CompensationNode(Node):
         reliability        = self.get_parameter("reliability").get_parameter_value().string_value
         self._publish_when_no_tf = self.get_parameter("publish_when_no_tf").get_parameter_value().bool_value
         storage_path       = self.get_parameter("storage_path").get_parameter_value().string_value
-        enable_dashboard   = self.get_parameter("enable_dashboard").get_parameter_value().bool_value
         host               = self.get_parameter("host").get_parameter_value().string_value
-        port               = self.get_parameter("port").get_parameter_value().integer_value
+        dashboard_port     = self.get_parameter("dashboard_port").get_parameter_value().integer_value
+        # Dashboard is enabled iff an explicit positive port was given;
+        # dashboard_port <= 0 means "not specified" -> disabled.
+        enable_dashboard   = dashboard_port > 0
         self._gravity      = self.get_parameter("gravity").get_parameter_value().double_value
         self._tf_timeout   = self.get_parameter("tf_timeout").get_parameter_value().double_value
         self._tf_max_age   = self.get_parameter("tf_max_age").get_parameter_value().double_value
@@ -1273,7 +1279,7 @@ class CompensationNode(Node):
         self._http_thread: Optional[threading.Thread] = None
         if enable_dashboard:
             handler = partial(_DashboardHandler, dashboard=self)
-            self._httpd = ThreadingHTTPServer((host, port), handler)
+            self._httpd = ThreadingHTTPServer((host, dashboard_port), handler)
             self._http_thread = threading.Thread(
                 target=self._httpd.serve_forever, daemon=True)
             self._http_thread.start()
@@ -1302,10 +1308,11 @@ class CompensationNode(Node):
             "(applied to compensated wrench; live-tunable)")
         if enable_dashboard:
             self.get_logger().info(
-                f"web dashboard: http://{host if host != '0.0.0.0' else _local_ip()}:{port}/")
+                f"web dashboard: http://{host if host != '0.0.0.0' else _local_ip()}:{dashboard_port}/")
         else:
             self.get_logger().info(
-                "web dashboard: disabled (set enable_dashboard:=true to launch it)")
+                "web dashboard: disabled (set dashboard_port:=<port>, "
+                "e.g. dashboard_port:=8100, to launch it)")
 
     def destroy_node(self):  # noqa: D401
         if self._httpd is not None:

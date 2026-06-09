@@ -123,6 +123,23 @@ _DEFAULT_CONTROLLER_KINDS: List[str] = [
 # parameters
 # ---------------------------------------------------------------------------
 _PARAM_DECLARATIONS: List[Tuple[str, object]] = [
+    # multi-instance identity ----------------------------------------------
+    # Empty (default) -> single-instance setup; node name, config section,
+    # and default controller catalogue all keep their legacy names. When
+    # set (e.g. "left" / "right" for a dual-arm robot), the launch file
+    # uses the value to:
+    #   * name the node ``cartesian_control_manager_<instance>``,
+    #   * read defaults from the YAML section
+    #     ``cartesian_control_manager_<instance>:`` (falling back to the
+    #     legacy ``cartesian_control_manager:`` section),
+    #   * suffix the default FZI controller / JTC names with
+    #     ``_<instance>`` so two managers can coexist on a single
+    #     controller_manager.
+    # The node itself only uses this value for logging + the published
+    # state JSON; the actual orchestration is driven by the explicit
+    # ``available_controllers`` / ``fzi_jtc_controller_name`` / etc.
+    # parameters set by the launch file.
+    ("instance_name",         ""),
     # connectivity ---------------------------------------------------------
     ("wrench_topic",          "/ft_sensor/wrench_compensated"),
     ("joint_states_topic",    "/joint_states"),
@@ -133,7 +150,7 @@ _PARAM_DECLARATIONS: List[Tuple[str, object]] = [
     ("controller_kinds",       _DEFAULT_CONTROLLER_KINDS),
     ("active_controller_name", "cartesian_force_controller"),
     # Default JTC name follows ros2_control's convention; per-robot
-    # configs override (Duco uses 'arm_1_controller', UR uses
+    # configs override it (e.g. 'arm_1_controller' or
     # 'scaled_joint_trajectory_controller').
     ("fzi_jtc_controller_name", "joint_trajectory_controller"),
     ("fzi_target_frame",        "tool0"),
@@ -332,8 +349,10 @@ class CartesianControlNode(Node):
                f"(timeout {self._external_target_wrench_timeout:.2f}s)"
                if self._sub_external_tw is not None
                else "no external target_wrench input (parameter setpoint only)")
+        instance_tag = (f" instance={self._instance_name!r}"
+                        if self._instance_name else "")
         self.get_logger().info(
-            f"orchestrating FZI: available controllers=[{ctl_list}]; "
+            f"orchestrating FZI:{instance_tag} available controllers=[{ctl_list}]; "
             f"engage will switch "
             f"{self._fzi_jtc_controller_name!r} -> "
             f"{self._active_controller_name!r}; relaying wrench "
@@ -353,6 +372,7 @@ class CartesianControlNode(Node):
     # ------------------------------------------------------------------
     def _read_params(self) -> None:
         gp = lambda name: self.get_parameter(name).value  # noqa: E731
+        self._instance_name = str(gp("instance_name")).strip()
         self._wrench_topic = str(gp("wrench_topic"))
         self._joint_states_topic = str(gp("joint_states_topic"))
         self._controller_manager_ns = str(gp("controller_manager_ns")).rstrip("/")
@@ -916,6 +936,7 @@ class CartesianControlNode(Node):
             q_age = (now - self._last_q_mono
                      if self._last_q_mono is not None else None)
             payload = {
+                "instance_name":        self._instance_name,
                 "engaged":              self._engaged,
                 "trip_reason":          self._trip_reason,
                 "wrench_topic":         self._wrench_topic,

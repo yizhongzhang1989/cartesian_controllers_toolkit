@@ -56,15 +56,15 @@ from std_msgs.msg import String
 from std_srvs.srv import Trigger
 from tf2_ros import Buffer, TransformException, TransformListener
 
-# `common.config_manager` exposes the project's robot_config.yaml.  The
+# `cct_common.config_manager` exposes the project's robot_config.yaml.  The
 # dashboard's "Tool frames" editor reads `<bringup>.aux_frames`
 # from the resolved config and writes back via the line-based
 # `save_aux_frames` helper (which preserves comments).  Imported with a
 # soft fallback so the dashboard still starts in environments where
-# `common` is not on the PYTHONPATH (the API simply returns a clear
+# `cct_common` is not on the PYTHONPATH (the API simply returns a clear
 # error in that case).
 try:
-    from common.config_manager import (  # type: ignore
+    from cct_common.config_manager import (  # type: ignore
         get_config as _get_config,
         read_aux_frames as _read_aux_frames,
         save_aux_frames as _save_aux_frames,
@@ -76,13 +76,13 @@ except Exception as _exc:  # noqa: BLE001
     _save_aux_frames = None  # type: ignore
     _COMMON_IMPORT_ERROR = f"{type(_exc).__name__}: {_exc}"
 
-# ``common.urdf_loader.update_aux_frames`` rewrites the
+# ``cct_common.urdf_loader.update_aux_frames`` rewrites the
 # ``<origin>`` of existing aux-frame joints in a URDF string, returning
 # a new URDF that can be pushed to ``robot_state_publisher`` via
 # SetParameters for live tool-frame updates.  Soft-imported for the
-# same reason as ``common.config_manager`` above.
+# same reason as ``cct_common.config_manager`` above.
 try:
-    from common.urdf_loader import (  # type: ignore
+    from cct_common.urdf_loader import (  # type: ignore
         update_aux_frames as _update_aux_frames,
     )
     _URDF_LOADER_IMPORT_ERROR: Optional[str] = None
@@ -206,8 +206,7 @@ _BASE_TUNABLES: List[Tuple[str, str]] = [
     ("pd_gains.rot_z.p",   "double"),
     # D (damping of de/dt; sized against the spring loop for compliance,
     # against FT-sensor noise for the force controller -- see
-    # the per-robot fzi_preset.yaml header (e.g.
-    # src/duco_robot_bringup/config/fzi_preset.yaml).
+    # the per-robot fzi_preset.yaml header).
     ("pd_gains.trans_x.d", "double"),
     ("pd_gains.trans_y.d", "double"),
     ("pd_gains.trans_z.d", "double"),
@@ -621,21 +620,22 @@ class DashboardNode(Node):
         # be read (e.g. the controller node isn't running yet).  At
         # runtime ``api_jog`` and the TF-rate sampler resolve the
         # actual frames via ``_resolve_active_frames()`` so they
-        # automatically track whatever the FZI YAML configured.  The
-        # default ``compliance_link`` matches the EE tip declared in
-        # the per-robot ``fzi_preset.yaml`` and ``aux_frames`` in
-        # ``config/robot_config.yaml``; if the dashboard is launched
-        # before the controllers, jog will use these defaults until
-        # the parameters become available.
+        # automatically track whatever the FZI YAML configured.  These
+        # robot-neutral defaults (``base_link`` / ``tool0``) are only a
+        # backstop for a bare ``ros2 run`` before the controllers exist;
+        # per-robot setups set the real frames in the
+        # ``cartesian_controller_dashboard:`` section of
+        # ``config/robot_config.yaml`` (e.g. a robot with an aux tool
+        # tip names its ``compliance_link``).
         ("base_frame", "base_link"),
-        ("tool_frame", "compliance_link"),
+        ("tool_frame", "tool0"),
         ("service_timeout_sec", 2.0),
         # Top-level YAML key in ``robot_config.yaml`` whose
         # ``aux_frames`` list the dashboard's "Tool frames" panel
         # reads / writes.  Empty string disables the panel (the
         # API returns a clear error).  Per-robot workspaces should
         # set this to their bringup package name (e.g.
-        # ``duco_robot_bringup``).
+        # ``my_robot_bringup``).
         ("aux_frames_section", ""),
         # http -----------------------------------------------------------
         ("host", "0.0.0.0"),
@@ -1893,13 +1893,14 @@ class DashboardNode(Node):
     #
     # IMPORTANT: the FZI controllers interpret ``target_frame`` as the
     # target pose for *their own* ``end_effector_link`` parameter, NOT
-    # the dashboard's ``tool_frame``.  If we look up TF for ``link_6``
-    # but publish that as the target for a controller whose end-effector
-    # is ``compliance_link`` (offset ~33 cm along link_6's local Z),
-    # the controller treats the published pose as 33 cm displaced from
-    # where compliance_link currently sits -- the robot tries to close
-    # that gap regardless of which jog button was pressed, producing
-    # the classic "robot moves up whatever button I click" symptom.
+    # the dashboard's ``tool_frame``.  If we look up TF for the
+    # dashboard's ``tool_frame`` but publish that as the target for a
+    # controller whose ``end_effector_link`` is a different frame
+    # (offset along the tool axis), the controller treats the published
+    # pose as displaced from where its end-effector currently sits --
+    # the robot tries to close that gap regardless of which jog button
+    # was pressed, producing the classic "robot moves up whatever
+    # button I click" symptom.
     # We resolve the controller's actual ``end_effector_link`` (and
     # ``robot_base_link``) at jog time and use those frames for the
     # current-pose lookup so the delta is applied to the right tip.
@@ -2102,7 +2103,7 @@ class DashboardNode(Node):
     # xyz / rpy of each aux_frame (e.g. ft_sensor_link, compliance_link)
     # without editing YAML by hand.  Changes are persisted to
     # ``config/robot_config.yaml`` via the line-targeted
-    # ``common.config_manager.save_aux_frames`` helper which preserves
+    # ``cct_common.config_manager.save_aux_frames`` helper which preserves
     # comments and unrelated keys; they take effect on the next robot
     # bringup.  The top-level YAML key that owns the list is set by
     # the ``aux_frames_section`` parameter (per-robot configuration).
@@ -2115,7 +2116,7 @@ class DashboardNode(Node):
         """Return the current aux_frames list as on disk."""
         if _get_config is None or _read_aux_frames is None:
             raise RuntimeError(
-                "common.config_manager not importable: "
+                "cct_common.config_manager not importable: "
                 f"{_COMMON_IMPORT_ERROR}")
         if not self._aux_frames_section:
             raise RuntimeError(
@@ -2155,7 +2156,7 @@ class DashboardNode(Node):
         """
         if _save_aux_frames is None or _get_config is None:
             raise RuntimeError(
-                "common.config_manager not importable: "
+                "cct_common.config_manager not importable: "
                 f"{_COMMON_IMPORT_ERROR}")
         if not self._aux_frames_section:
             raise RuntimeError(
@@ -2266,7 +2267,7 @@ class DashboardNode(Node):
         if _update_aux_frames is None or _read_aux_frames is None:
             return {
                 "ok":    False,
-                "error": ("common.urdf_loader not "
+                "error": ("cct_common.urdf_loader not "
                           f"importable: {_URDF_LOADER_IMPORT_ERROR}"),
             }
 
