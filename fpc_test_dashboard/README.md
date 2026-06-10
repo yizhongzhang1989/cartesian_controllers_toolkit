@@ -13,8 +13,11 @@ and vibration so you know whether (and how) the robot is usable.
 ## What it does
 
 1. Reads the robot's movable joints from **`/robot_description`** (the URDF).
-2. Discovers **`ForwardCommandController`** instances on `/controller_manager`
-   and the ordered joints each one commands.
+2. Discovers **forward-position controllers** on `/controller_manager` and the
+   ordered joints each one commands. Both
+   `forward_command_controller/ForwardCommandController` (e.g. Duco) and
+   `position_controllers/JointGroupPositionController` (e.g. Universal Robots)
+   are recognised.
 3. You pick a controller and a subset of its joints in the web UI.
 4. For each selected joint it runs an automatic battery and plots it live:
 
@@ -76,6 +79,7 @@ script.
 | `joint_states_topic` | `/joint_states` | actual-position feedback |
 | `wrench_topic` | `""` | optional 6-axis wrench (force ground truth); empty = off |
 | `controller_manager` | `/controller_manager` | where to discover FPCs |
+| `controller_name` | `""` | pin one controller by name; empty = auto-discover every forward-position controller. When set, the plugin-type allowlist is bypassed for that controller (escape hatch for vendor FPC subclasses with an unrecognised type), but it must still command only `<joint>/position`. |
 | `send_rate` | `200.0` | command publish + analysis rate (Hz) |
 | `default_limit_deg` | `8.0` | per-joint safety envelope around the start pose |
 | `report_dir` | `~/.ros/fpc_test_dashboard/runs` | where each run's report + raw data is saved |

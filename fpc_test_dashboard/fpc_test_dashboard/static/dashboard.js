@@ -35,7 +35,7 @@
     });
     if (!info.controllers || info.controllers.length === 0) {
       const o = document.createElement("option");
-      o.textContent = "(no ForwardCommandController found — launch the robot first)";
+      o.textContent = "(no forward-position controller found — launch the robot first)";
       o.disabled = true; selCtrl.appendChild(o);
     }
     if (prev && ctrlByName[prev]) selCtrl.value = prev;

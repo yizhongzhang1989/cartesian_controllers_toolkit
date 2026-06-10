@@ -11,6 +11,8 @@ Examples::
     ros2 launch fpc_test_dashboard dashboard.launch.py port:=9140
     ros2 launch fpc_test_dashboard dashboard.launch.py \\
         wrench_topic:=/right_arm_force_torque_sensor_broadcaster/wrench
+    ros2 launch fpc_test_dashboard dashboard.launch.py \\
+        controller_name:=forward_position_controller
 """
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, LogInfo
@@ -24,6 +26,7 @@ _FALLBACKS = {
     "joint_states_topic": "/joint_states",
     "wrench_topic": "",
     "controller_manager": "/controller_manager",
+    "controller_name": "",
     "send_rate": 200.0,
     "default_limit_deg": 8.0,
     "report_dir": "~/.ros/fpc_test_dashboard/runs",

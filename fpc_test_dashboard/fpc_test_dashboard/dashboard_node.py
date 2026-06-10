@@ -7,8 +7,10 @@ on top of it.
 What it does
 ------------
 1. Reads the robot's movable joints from ``/robot_description`` (the URDF).
-2. Discovers ``ForwardCommandController`` instances on ``/controller_manager``
-   and the ordered joints each one commands.
+2. Discovers forward-position controllers on ``/controller_manager`` and the
+   ordered joints each one commands. Both
+   ``forward_command_controller/ForwardCommandController`` (Duco) and
+   ``position_controllers/JointGroupPositionController`` (UR) are recognised.
 3. The operator picks a controller + a subset of its joints in the web UI.
 4. For each selected joint it runs an automatic battery (see test_logic):
    SMOOTH (continuous reference), STAIR (low-rate teleop-style stepped command),
@@ -39,6 +41,13 @@ Parameters
   joint_states_topic string  default "/joint_states"
   wrench_topic       string  default ""  (empty => no force ground-truth)
   controller_manager string  default "/controller_manager"
+  controller_name    string  default ""  (pin ONE controller by name; empty =>
+                             auto-discover every forward-position controller.
+                             When set, the plugin-type allowlist is bypassed for
+                             that controller -- an escape hatch for vendor
+                             ForwardCommandController subclasses with an
+                             unrecognised type -- but it must still command only
+                             <joint>/position.)
   send_rate          double  default 200.0   (command publish + analysis rate)
   default_limit_deg  double  default 8.0     (per-joint safety envelope)
   report_dir         string  default "~/.ros/fpc_test_dashboard/runs"
@@ -80,6 +89,17 @@ _STATIC_DIR = Path(__file__).resolve().parent / "static"
 RAD2DEG = 180.0 / math.pi
 DEG2RAD = math.pi / 180.0
 
+# Controller plugin types whose ``<controller>/commands`` accepts a
+# Float64MultiArray of joint positions -- the forward-position-control variants
+# this dashboard can drive. Duco ships
+# ``forward_command_controller/ForwardCommandController``; the UR driver ships
+# ``position_controllers/JointGroupPositionController`` (a ForwardCommandController
+# subclass registered under a different plugin name). Matched case-insensitively
+# as substrings of the controller type; the position-only interface check in
+# ``_on_controllers`` further guarantees a velocity-configured variant is never
+# accepted.
+_FPC_TYPE_KEYS = ("forward_command_controller", "jointgrouppositioncontroller")
+
 
 def _smoothstep(a: float) -> float:
     a = 0.0 if a < 0 else (1.0 if a > 1 else a)
@@ -97,6 +117,7 @@ class FpcTestDashboard(Node):
         self.declare_parameter("joint_states_topic", "/joint_states")
         self.declare_parameter("wrench_topic", "")
         self.declare_parameter("controller_manager", "/controller_manager")
+        self.declare_parameter("controller_name", "")
         self.declare_parameter("send_rate", 200.0)
         self.declare_parameter("default_limit_deg", 8.0)
         self.declare_parameter("report_dir", "~/.ros/fpc_test_dashboard/runs")
@@ -107,6 +128,7 @@ class FpcTestDashboard(Node):
         self._js_topic = gp("joint_states_topic").value
         self._wrench_topic = gp("wrench_topic").value
         self._cm_ns = gp("controller_manager").value.rstrip("/")
+        self._ctrl_name = str(gp("controller_name").value).strip()
         self._send_rate = float(gp("send_rate").value)
         self._default_limit_deg = float(gp("default_limit_deg").value)
         self._report_dir = str(Path(gp("report_dir").value).expanduser())
@@ -163,7 +185,9 @@ class FpcTestDashboard(Node):
         self.get_logger().info(
             f"fpc_test_dashboard on http://{self._host}:{self._port}  "
             f"(js={self._js_topic}, wrench={self._wrench_topic or 'none'}, "
-            f"cm={self._cm_ns})")
+            f"cm={self._cm_ns}"
+            + (f", controller={self._ctrl_name}" if self._ctrl_name else "")
+            + ")")
 
     # ---- subscriptions ----------------------------------------------------
     def _on_urdf(self, msg: String) -> None:
@@ -200,10 +224,22 @@ class FpcTestDashboard(Node):
             resp = fut.result()
         except Exception:  # noqa: BLE001
             return
+        want = self._ctrl_name          # "" => auto-discover all matching FPCs
         found: List[Dict[str, Any]] = []
+        named_match = None              # the requested controller, if it exists
         for c in resp.controller:
+            if want and c.name != want:
+                continue
+            if want:
+                named_match = c
             ctype = c.type or ""
-            if "forward_command_controller" not in ctype.lower():
+            # Auto-discovery is gated by the plugin-type allowlist.  An explicit
+            # controller_name bypasses that allowlist (escape hatch for vendor
+            # ForwardCommandController subclasses whose type string we don't
+            # recognise) -- but the position-only interface check below is
+            # ALWAYS enforced: the runner streams joint POSITIONS to
+            # <name>/commands and needs the ordered joint list.
+            if not want and not any(k in ctype.lower() for k in _FPC_TYPE_KEYS):
                 continue
             # ordered joints from required_command_interfaces ("joint/position")
             joints, pos_only = [], True
@@ -216,6 +252,18 @@ class FpcTestDashboard(Node):
             if joints and pos_only:
                 found.append({"name": c.name, "type": ctype,
                               "state": c.state, "joints": joints})
+        if want and not found:
+            if named_match is None:
+                self.get_logger().warn(
+                    f"controller_name='{want}' is not loaded on {self._cm_ns} "
+                    f"-- check the name with `ros2 control list_controllers`",
+                    throttle_duration_sec=10.0)
+            else:
+                self.get_logger().warn(
+                    f"controller_name='{want}' (type='{named_match.type}') is "
+                    f"not drivable: a forward-position controller must command "
+                    f"ONLY <joint>/position interfaces",
+                    throttle_duration_sec=10.0)
         with self._lock:
             self._controllers = found
 
