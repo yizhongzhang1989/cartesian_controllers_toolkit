@@ -1,0 +1,39 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>fpc_test_dashboard</name>
+  <version>0.1.0</version>
+  <description>
+    Forward-position-controller (FPC) capability test platform. A web
+    dashboard used to characterise a new robot's position-passthrough
+    behaviour before deploying host-side admittance / Cartesian force
+    control on top of it. It reads the robot's joints from the URDF
+    (/robot_description), lets the operator pick joints to test, then
+    runs an automatic battery per joint -- smooth tracking, stair-stepped
+    (low-rate teleop) tracking, and command-smoothed tracking -- driving
+    the arm's ForwardCommandController and recording the actual joint
+    motion (and the wrist wrench, if available) to plot the tracking
+    quality, latency and vibration that admittance control will depend on.
+  </description>
+
+  <maintainer email="yizhongzhang1989@gmail.com">yizhongzhang</maintainer>
+  <license>MIT</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>controller_manager_msgs</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>ros2launch</exec_depend>
+  <exec_depend>cct_common</exec_depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
