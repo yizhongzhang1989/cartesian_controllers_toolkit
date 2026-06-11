@@ -1,4 +1,4 @@
-# fpc_test_dashboard
+# robot_feasibility_test
 
 A web platform to **test a robot's forward-position-control (FPC) capability**
 before deploying host-side admittance / Cartesian force control on top of it.
@@ -52,14 +52,14 @@ is an **optional** client. Three ways to drive it:
 
 ```bash
 # 1) Headless engine (the main task) — runs the battery, saves reports, no UI.
-ros2 launch fpc_test_dashboard engine.launch.py \
+ros2 launch robot_feasibility_test engine.launch.py \
     wrench_topic:=/right_arm_force_torque_sensor_broadcaster/wrench
 
 # 2) Optional web dashboard (a thin client of the engine) — monitor / drive live.
-ros2 launch fpc_test_dashboard dashboard.launch.py    # then open http://localhost:8140
+ros2 launch robot_feasibility_test dashboard.launch.py    # then open http://localhost:8140
 
 # 3) Headless CLI — scripted / CI runs against a running engine.
-ros2 run fpc_test_dashboard fpc_test \
+ros2 run robot_feasibility_test feasibility_test \
     --controller right_arm_forward_position_controller --joints right_arm_joint4 \
     --tests smooth,step,resonance,sweep --amp 4 --resonance-deg 2 \
     --sweep-deg 1.0 --sweep-band 0.3,8.0 --seg 12 --limit 8
@@ -102,7 +102,7 @@ table fills in as each segment finishes. **Stop** aborts and ramps back.
 Every run is persisted (like `temp/fp_control_test/exp1_ros2_control`) so you can
 check it later — no need to keep the page open. For each run the dashboard writes
 a timestamped folder under `report_dir`
-(default `~/.ros/fpc_test_dashboard/runs/<timestamp>_<controller>/`):
+(default `~/.ros/robot_feasibility_test/runs/<timestamp>_<controller>/`):
 
 | file | contents |
 |---|---|
@@ -128,7 +128,7 @@ script.
 | `controller_name` | `""` | pin one controller by name; empty = auto-discover every forward-position controller. When set, the plugin-type allowlist is bypassed for that controller (escape hatch for vendor FPC subclasses with an unrecognised type), but it must still command only `<joint>/position`. |
 | `send_rate` | `200.0` | command publish + analysis rate (Hz) |
 | `default_limit_deg` | `8.0` | per-joint safety envelope around the start pose |
-| `report_dir` | `~/.ros/fpc_test_dashboard/runs` | where each run's report + raw data is saved |
+| `report_dir` | `~/.ros/robot_feasibility_test/runs` | where each run's report + raw data is saved |
 
 ## Safety
 

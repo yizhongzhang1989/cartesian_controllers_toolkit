@@ -1,5 +1,5 @@
 "use strict";
-// FPC Test Dashboard front-end: populates joints/controllers from /api/info,
+// Robot Feasibility Test dashboard front-end: populates joints/controllers from /api/info,
 // drives a run via /api/run, polls /api/state for the live trace + results.
 (() => {
   const $ = (id) => document.getElementById(id);
@@ -14,14 +14,29 @@
   let ctrlByName = {};       // name -> controller
   let unit = "deg";
   let lastReportId = null;   // track the newest saved run to surface a link
+  let pollFails = 0;         // consecutive /api/state failures (grace window)
+
+  // fetch + parse JSON with a hard timeout, so a single hung request on a
+  // momentarily-saturated host can't stack up behind the 10 Hz poll loop.
+  async function fetchJSON(url, ms = 2500, opts = {}) {
+    const ac = new AbortController();
+    const tid = setTimeout(() => ac.abort(), ms);
+    try {
+      const r = await fetch(url, { ...opts, signal: ac.signal });
+      return await r.json();
+    } finally {
+      clearTimeout(tid);
+    }
+  }
 
   // ---- setup -------------------------------------------------------------
   async function loadInfo() {
     try {
-      const r = await fetch("/api/info"); info = await r.json();
-      conn.textContent = "connected"; conn.className = "status ok";
+      info = await fetchJSON("/api/info");
     } catch (e) {
-      conn.textContent = "disconnected"; conn.className = "status bad"; return;
+      // Don't clobber the connection indicator here — poll() (10 Hz) is the
+      // single source of truth for connected / reconnecting / disconnected.
+      return;
     }
     ctrlByName = {};
     const prev = selCtrl.value;
@@ -49,6 +64,10 @@
       $("p-amp").value = d.amp_deg; $("p-freq").value = d.freq_hz;
       $("p-seg").value = d.seg_seconds; $("p-stair").value = d.stair_step_deg;
       $("p-lp").value = d.lp_hz; $("p-limit").value = d.limit_deg;
+      if (d.resonance_deg != null) $("p-res").value = d.resonance_deg;
+      if (d.sweep_deg != null) $("p-sweep").value = d.sweep_deg;
+      if (d.sweep_f0_hz != null) $("p-sweep-f0").value = d.sweep_f0_hz;
+      if (d.sweep_f1_hz != null) $("p-sweep-f1").value = d.sweep_f1_hz;
       loadInfo._applied = true;
     }
     renderJoints();
@@ -105,6 +124,8 @@
       amp_deg: +$("p-amp").value, freq_hz: +$("p-freq").value,
       seg_seconds: +$("p-seg").value, stair_step_deg: +$("p-stair").value,
       lp_hz: +$("p-lp").value, limit_deg: +$("p-limit").value,
+      resonance_deg: +$("p-res").value, sweep_deg: +$("p-sweep").value,
+      sweep_f0_hz: +$("p-sweep-f0").value, sweep_f1_hz: +$("p-sweep-f1").value,
     };
     const r = await fetch("/api/run", {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -121,8 +142,23 @@
   // ---- live state polling ------------------------------------------------
   async function poll() {
     let s;
-    try { s = await (await fetch("/api/state")).json(); }
-    catch (e) { conn.textContent = "disconnected"; conn.className = "status bad"; return; }
+    try { s = await fetchJSON("/api/state", 8000); }
+    catch (e) {
+      // Tolerate transient blips: a saturated host, OR a browser tab that the OS
+      // has throttled in the background (Chromium clamps timers in hidden tabs,
+      // so polls slow to ~1 Hz and an aggressive timeout can spuriously abort a
+      // request that is actually working). Keep the last status on screen, show a
+      // soft "reconnecting…" first, and only flag a hard "disconnected" after a
+      // longer grace window instead of flashing red on a few slow polls.
+      pollFails++;
+      if (pollFails >= 12) {
+        conn.textContent = "disconnected"; conn.className = "status bad";
+      } else if (conn.className !== "status bad") {
+        conn.textContent = "reconnecting…"; conn.className = "status";
+      }
+      return;
+    }
+    pollFails = 0;
     const running = s.status === "running";
     btnRun.disabled = running; btnStop.disabled = !running;
     statusEl.textContent = s.status + (s.message ? " — " + s.message : "");
@@ -130,12 +166,23 @@
       (s.status === "error" ? "bad" : (s.status === "done" ? "ok" : "")));
     const p = s.progress || {};
     prog.textContent = p.n ? `${p.joint} · ${p.segment} (${p.i}/${p.n})` : "—";
-    if (s.js_age != null && s.js_age > 0.5) {
+    // A successful poll means the dashboard <-> engine link is fine. Distinguish
+    // a truly stale engine (no fresh joint_states) from a healthy run.
+    if (s.status === "engine_offline") {
+      conn.textContent = "engine offline"; conn.className = "status bad";
+    } else if (s.js_age != null && s.js_age > 1.0) {
       conn.textContent = "joint_states stale"; conn.className = "status bad";
-    } else { conn.textContent = "connected"; conn.className = "status ok"; }
-    drawPlot(s.live || [], p);
-    renderResults(s.results || []);
-    handleReport(s.last_report, s.status);
+    } else {
+      conn.textContent = "connected"; conn.className = "status ok";
+    }
+    // Guard the render path so one bad datum can never wedge the poll loop.
+    // Skip the costly canvas redraw while the tab is hidden — a backgrounded tab
+    // on a busy host should not burn CPU it can't get scheduled for anyway.
+    if (!document.hidden) {
+      try { drawPlot(s.live || [], p); } catch (e) { /* keep polling */ }
+    }
+    try { renderResults(s.results || []); } catch (e) { /* keep polling */ }
+    try { handleReport(s.last_report, s.status); } catch (e) { /* keep polling */ }
   }
 
   // ---- saved runs --------------------------------------------------------
@@ -157,7 +204,7 @@
 
   async function loadRuns() {
     let data;
-    try { data = await (await fetch("/api/runs")).json(); }
+    try { data = await fetchJSON("/api/runs", 8000); }
     catch (e) { return; }
     if (data.report_dir) runsDir.textContent = data.report_dir;
     renderRuns(data.runs || []);
@@ -211,6 +258,7 @@
         r.joint, r.segment,
         fmt(r.pos_hf, 3) + " " + u, fhf,
         fmt(r.lag_ms, 0), fmt(r.rmse, 3) + " " + u, fmt(r.amp, 2) + " " + u,
+        dynamicsText(r, u),
       ];
       cells.forEach((c, i) => {
         const td = document.createElement("td");
@@ -220,6 +268,30 @@
     });
   }
   const fmt = (v, n) => (v == null || v !== v) ? "—" : (+v).toFixed(n);
+
+  // Kind-specific dynamics summary (the new step / resonance / sweep / hold
+  // metrics that don't fit the tracking columns).
+  function dynamicsText(r, u) {
+    const k = r.kind;
+    if (k === "hold") {
+      const bits = [];
+      if (r.dc_err != null) bits.push(`DC ${fmt(r.dc_err, 3)} ${u}`);
+      if (r.wrench_noise_n != null) bits.push(`noise ${fmt(r.wrench_noise_n, 3)} N`);
+      if (r.dt_jitter_ms != null) bits.push(`jitter ${fmt(r.dt_jitter_ms, 2)} ms`);
+      return bits.join(" · ") || "—";
+    }
+    if (k === "step")
+      return `overshoot ${fmt(r.overshoot_pct, 0)}% · rise ${fmt(r.rise_ms, 0)} ms ` +
+             `· settle ${fmt(r.settle_ms, 0)} ms`;
+    if (k === "resonance")
+      return `f_n ${fmt(r.f_n, 1)} Hz · ζ ${fmt(r.zeta, 3)}`;
+    if (k === "sweep") {
+      const bits = [`−3dB BW ${fmt(r.bw_hz, 1)} Hz`];
+      if (r.f_n_wrench != null) bits.push(`wrench f_n ${fmt(r.f_n_wrench, 1)} Hz`);
+      return bits.join(" · ");
+    }
+    return "—";
+  }
 
   // ---- live plot ---------------------------------------------------------
   let plotMax = 5;
@@ -282,9 +354,28 @@
 
   // ---- loops -------------------------------------------------------------
   $("btn-refresh-runs").addEventListener("click", loadRuns);
+  // When the tab is brought back to the foreground, refresh immediately and
+  // clear any soft "reconnecting…" state so it catches up at once.
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) { pollFails = 0; loadInfo(); poll(); }
+  });
   loadInfo();
   loadRuns();
-  setInterval(loadInfo, 3000);   // refresh controller catalogue
-  setInterval(poll, 100);        // 10 Hz live update
-  setInterval(loadRuns, 8000);   // refresh saved-run history
+  setInterval(loadInfo, 5000);   // refresh controller catalogue
+  setInterval(loadRuns, 10000);  // refresh saved-run history
+  // Self-scheduling ~5 Hz poll: wait for each request (or its timeout) to settle
+  // before firing the next, so a slow response can't pile up overlapping
+  // fetches. 5 Hz keeps the live trace smooth while halving the request pressure
+  // on a busy host versus 10 Hz (the engine itself publishes status at 10 Hz, so
+  // nothing is lost that the saved report doesn't capture in full).
+  (async function pollLoop() {
+    for (;;) {
+      try { await poll(); } catch (e) { /* poll handles its own errors */ }
+      // Foreground: ~5 Hz live updates. Hidden/background tab: back off to 1 Hz
+      // so the renderer isn't fighting for CPU on a busy host (and timer
+      // throttling won't pile up aborted fetches). poll() still runs so the tab
+      // reconnects and catches up the moment it's foregrounded again.
+      await new Promise((r) => setTimeout(r, document.hidden ? 1000 : 200));
+    }
+  })();
 })();

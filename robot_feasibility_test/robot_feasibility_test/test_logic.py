@@ -1,4 +1,4 @@
-"""Pure-Python core for the FPC test dashboard (no ROS dependency).
+"""Pure-Python core for the robot feasibility test platform (no ROS dependency).
 
 Holds everything that can be unit-tested without a robot:
 

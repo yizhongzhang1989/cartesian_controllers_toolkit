@@ -3,12 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>FPC Test Dashboard</title>
+<title>Robot Feasibility Test</title>
 <link rel="stylesheet" href="/static/dashboard.css">
 </head>
 <body>
   <header>
-    <h1>FPC Test Dashboard</h1>
+    <h1>Robot Feasibility Test</h1>
     <div class="sub">Forward-position-controller capability test ·
       <span id="conn" class="status">connecting…</span></div>
   </header>
@@ -45,11 +45,18 @@
           <label>Stair step <input id="p-stair" type="number" step="0.5" value="1.5"> deg</label>
           <label>Smoother cutoff <input id="p-lp" type="number" step="1" value="10"> Hz</label>
           <label>Safety limit <input id="p-limit" type="number" step="1" value="8"> deg</label>
+          <label>Resonance tap <input id="p-res" type="number" step="0.5" value="2"> deg</label>
+          <label>Sweep amplitude <input id="p-sweep" type="number" step="0.5" value="1.5"> deg</label>
+          <label>Sweep band <input id="p-sweep-f0" type="number" step="0.1" value="0.3"> –
+            <input id="p-sweep-f1" type="number" step="0.5" value="6"> Hz</label>
         </div>
         <div class="tests">
           <label><input type="checkbox" class="t-test" value="smooth" checked> Smooth move</label>
           <label><input type="checkbox" class="t-test" value="stair" checked> Stair move (stepped)</label>
           <label><input type="checkbox" class="t-test" value="smoothed" checked> Smoothed (stair + LP)</label>
+          <label><input type="checkbox" class="t-test" value="step"> Step response</label>
+          <label><input type="checkbox" class="t-test" value="resonance"> Resonance (ring-down → f_n, ζ)</label>
+          <label><input type="checkbox" class="t-test" value="sweep"> Frequency sweep (Bode BW)</label>
         </div>
       </details>
 
@@ -81,7 +88,7 @@
       <table id="results">
         <thead><tr>
           <th>joint</th><th>test</th><th>pos HF</th><th>force HF (N)</th>
-          <th>lag (ms)</th><th>RMSE</th><th>amp</th>
+          <th>lag (ms)</th><th>RMSE</th><th>amp</th><th>dynamics</th>
         </tr></thead>
         <tbody></tbody>
       </table>

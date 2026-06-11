@@ -1,19 +1,21 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>fpc_test_dashboard</name>
+  <name>robot_feasibility_test</name>
   <version>0.1.0</version>
   <description>
-    Forward-position-controller (FPC) capability test platform. A web
-    dashboard used to characterise a new robot's position-passthrough
-    behaviour before deploying host-side admittance / Cartesian force
-    control on top of it. It reads the robot's joints from the URDF
-    (/robot_description), lets the operator pick joints to test, then
-    runs an automatic battery per joint -- smooth tracking, stair-stepped
-    (low-rate teleop) tracking, and command-smoothed tracking -- driving
-    the arm's ForwardCommandController and recording the actual joint
-    motion (and the wrist wrench, if available) to plot the tracking
-    quality, latency and vibration that admittance control will depend on.
+    Robot force-control feasibility test platform. A headless test engine
+    (with an optional web dashboard) that characterises a robot's
+    forward-position-controller (FPC) behaviour before deploying host-side
+    admittance / Cartesian force control on top of it. It reads the robot's
+    joints from the URDF (/robot_description), lets the operator pick joints
+    to test, then runs an automatic battery per joint -- tracking (smooth /
+    stair / smoothed), step response, structural resonance and a frequency
+    sweep -- driving the arm's ForwardCommandController and recording the
+    actual joint motion (and the wrist wrench, if available). From the
+    measured metrics it produces a force-control readiness scorecard
+    (Suitable / Marginal / Unsuitable) with a predicted stable admittance
+    bandwidth.
   </description>
 
   <maintainer email="yizhongzhang1989@gmail.com">yizhongzhang</maintainer>

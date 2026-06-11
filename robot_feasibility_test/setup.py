@@ -1,6 +1,6 @@
 from setuptools import find_packages, setup
 
-package_name = 'fpc_test_dashboard'
+package_name = 'robot_feasibility_test'
 
 setup(
     name=package_name,
@@ -27,16 +27,17 @@ setup(
     zip_safe=True,
     maintainer='yizhongzhang',
     maintainer_email='yizhongzhang1989@gmail.com',
-    description='Web dashboard to test a robot\'s forward-position-controller '
-                'capability (smooth / stair / smoothed tracking) before '
-                'deploying host-side admittance control.',
+    description='Robot force-control feasibility test platform: a headless '
+                'engine (+ optional web dashboard) that characterises a '
+                'forward-position-controller and scores force-control '
+                'readiness before deploying host-side admittance control.',
     license='MIT',
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'engine_node = fpc_test_dashboard.engine_node:main',
-            'dashboard_node = fpc_test_dashboard.dashboard_node:main',
-            'fpc_test = fpc_test_dashboard.cli:main',
+            'engine_node = robot_feasibility_test.engine_node:main',
+            'dashboard_node = robot_feasibility_test.dashboard_node:main',
+            'feasibility_test = robot_feasibility_test.cli:main',
         ],
     },
 )

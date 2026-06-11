@@ -1,4 +1,4 @@
-"""Per-run report generation + history for the FPC test dashboard.
+"""Per-run report generation + history for the robot feasibility test platform.
 
 Every test run is persisted to disk so it can be reviewed later, in the same
 spirit as ``temp/fp_control_test/exp1_ros2_control``:
@@ -9,7 +9,7 @@ spirit as ``temp/fp_control_test/exp1_ros2_control``:
   colour-coded metrics table + per-joint capability verdict, so the single file
   is enough to view the run with no external assets.
 
-Layout on disk (under ``report_dir``, default ``~/.ros/fpc_test_dashboard/runs``)::
+Layout on disk (under ``report_dir``, default ``~/.ros/robot_feasibility_test/runs``)::
 
     <report_dir>/
       2026-06-10_14-23-05_right_arm_forward_position_controller/
@@ -49,6 +49,26 @@ _KIND_ORDER = {"hold": 0, "smooth": 1, "stair": 2, "smoothed": 3, "step": 4,
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
+def json_safe(obj):
+    """Recursively replace non-finite floats (NaN, +/-Infinity) with ``None``.
+
+    ``json.dumps`` emits the bare tokens ``NaN`` / ``Infinity`` which Python's
+    own ``json.loads`` accepts, but a browser's ``JSON.parse`` (and hence
+    ``fetch().json()``) rejects them as invalid JSON -- a single ``NaN`` in a
+    status payload makes the whole response unparseable in the browser, which
+    looks like the dashboard "disconnecting". Sanitising here keeps every JSON
+    response strictly valid. NaN metrics (e.g. an unresolved resonance ``zeta``)
+    become ``null`` and render as "n/a" / "—".
+    """
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    if isinstance(obj, dict):
+        return {k: json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [json_safe(v) for v in obj]
+    return obj
+
+
 def _slug(s: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", str(s)).strip("_") or "run"
 
@@ -316,7 +336,7 @@ def save_run(report_dir: str, run_meta: Dict[str, Any],
                           "overshoot_pct", "settle_ms")} for j in joints},
         "scorecard": {"overall": rollup, "joints": scorecards},
     }
-    (rundir / "manifest.json").write_text(json.dumps(manifest, indent=2))
+    (rundir / "manifest.json").write_text(json.dumps(json_safe(manifest), indent=2))
 
     # --- self-contained HTML ---
     html = _render_html(manifest, figs_b64, verdicts, unit_by, has_force,
@@ -503,7 +523,7 @@ def _render_html(manifest, figs_b64, verdicts, unit_by, has_force,
 
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>FPC test report — {manifest['id']}</title>
+<title>Robot feasibility test report — {manifest['id']}</title>
 <style>
   body{{font-family:-apple-system,Segoe UI,Roboto,sans-serif;margin:24px;
        color:#1b1f24;background:#f6f7f9}}
@@ -535,7 +555,7 @@ def _render_html(manifest, figs_b64, verdicts, unit_by, has_force,
   .good{{background:#e6f7ea}} .warn{{background:#fff6e0}} .bad{{background:#fde7e7}}
   .plot img{{max-width:980px;width:100%;border:1px solid #eaedf1;border-radius:8px}}
 </style></head><body>
-<h1>FPC test report</h1>
+<h1>Robot feasibility test report</h1>
 <p class="sub">Controller: <b>{arm}</b> · {when}</p>
 <p class="meta">{params_line}</p>
 <p class="legend">{legend}</p>

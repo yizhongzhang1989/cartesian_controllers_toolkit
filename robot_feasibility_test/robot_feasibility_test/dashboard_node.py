@@ -1,7 +1,7 @@
-"""FPC test DASHBOARD -- optional web UI; a thin client of the test engine.
+"""Robot feasibility test DASHBOARD -- optional web UI; a thin client of the engine.
 
 This process holds **no** test logic and **never** touches the robot directly.
-It is a pure client of ``fpc_test_engine``'s ROS API:
+It is a pure client of ``feasibility_test_engine``'s ROS API:
 
 * subscribes the engine's ``~/status`` (std_msgs/String JSON) and relays it to
   the browser (``/api/info`` + ``/api/state``);
@@ -18,8 +18,8 @@ Parameters
 ----------
   host         string  default "0.0.0.0"
   port         int     default 8140
-  engine_node  string  default "fpc_test_engine"  (engine node name to target)
-  report_dir   string  default "~/.ros/fpc_test_dashboard/runs"
+  engine_node  string  default "feasibility_test_engine"  (engine node to target)
+  report_dir   string  default "~/.ros/robot_feasibility_test/runs"
 """
 from __future__ import annotations
 
@@ -47,13 +47,13 @@ _STATIC_DIR = Path(__file__).resolve().parent / "static"
 _STALE_S = 3.0   # engine status older than this => treated as offline
 
 
-class FpcTestDashboard(Node):
+class FeasibilityTestDashboard(Node):
     def __init__(self):
-        super().__init__("fpc_test_dashboard")
+        super().__init__("feasibility_test_dashboard")
         self.declare_parameter("host", "0.0.0.0")
         self.declare_parameter("port", 8140)
-        self.declare_parameter("engine_node", "fpc_test_engine")
-        self.declare_parameter("report_dir", "~/.ros/fpc_test_dashboard/runs")
+        self.declare_parameter("engine_node", "feasibility_test_engine")
+        self.declare_parameter("report_dir", "~/.ros/robot_feasibility_test/runs")
 
         gp = self.get_parameter
         self._host = gp("host").value
@@ -81,7 +81,7 @@ class FpcTestDashboard(Node):
         self._httpd: Optional[ThreadingHTTPServer] = None
         self._start_http()
         self.get_logger().info(
-            f"fpc_test_dashboard (thin client of '{self._engine}') on "
+            f"feasibility_test_dashboard (thin client of '{self._engine}') on "
             f"http://{self._host}:{self._port}  report_dir={self._report_dir}")
 
     # ---- engine status ----------------------------------------------------
@@ -116,10 +116,34 @@ class FpcTestDashboard(Node):
             "last_report": None,
         }
 
-    def api_status(self) -> Dict[str, Any]:
-        """Single merged payload served to both /api/info and /api/state."""
+    def api_status(self, full: bool = True) -> Dict[str, Any]:
+        """Status payload served to clients.
+
+        ``full=True`` (``/api/info``) returns everything including the static
+        catalogue (joints, controllers, defaults). ``full=False`` (``/api/state``,
+        polled several times a second) drops that static catalogue and trims the
+        live trace, so the frequently-parsed payload stays small -- important when
+        the browser renderer is competing for CPU on a busy host.
+        """
         s = self._cached_status()
-        return s if s is not None else self._offline_payload()
+        if s is None:
+            s = self._offline_payload()
+        if full:
+            return s
+        # lightweight per-poll view: keep only what the live UI needs
+        live = s.get("live") or []
+        if len(live) > 300:
+            live = live[-300:]
+        return {
+            "status": s.get("status"),
+            "message": s.get("message"),
+            "progress": s.get("progress", {}),
+            "results": s.get("results", []),
+            "js_age": s.get("js_age"),
+            "wrench_available": s.get("wrench_available", False),
+            "live": live,
+            "last_report": s.get("last_report"),
+        }
 
     def api_runs(self) -> Dict[str, Any]:
         try:
@@ -172,11 +196,25 @@ class FpcTestDashboard(Node):
         dash = self
 
         class Handler(BaseHTTPRequestHandler):
+            # Keep connections alive: the dashboard polls /api/state at 10 Hz
+            # (plus /api/info and /api/runs), so without HTTP/1.1 keep-alive every
+            # request would open a fresh TCP connection that is then closed,
+            # piling up hundreds of TIME_WAIT sockets and exhausting the browser's
+            # per-host connection pool -> fetches stall and the UI shows
+            # "disconnected" even though the server is healthy. HTTP/1.1 + a
+            # correct Content-Length on every response lets the browser reuse a
+            # couple of persistent connections instead.
+            protocol_version = "HTTP/1.1"
+            timeout = 30  # close idle kept-alive connections so threads are freed
+
             def log_message(self, *_a):  # noqa: N802
                 return
 
             def _json(self, status, payload):
-                body = json.dumps(payload).encode("utf-8")
+                # Sanitise NaN/Infinity -> null so the response is strictly valid
+                # JSON for the browser (json.dumps would otherwise emit bare NaN
+                # tokens that fetch().json() rejects, breaking the whole page).
+                body = json.dumps(R.json_safe(payload)).encode("utf-8")
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))
@@ -220,8 +258,10 @@ class FpcTestDashboard(Node):
                     self._static("index.html")
                 elif path.startswith("/static/"):
                     self._static(path[len("/static/"):])
-                elif path == "/api/info" or path == "/api/state":
-                    self._json(200, dash.api_status())
+                elif path == "/api/info":
+                    self._json(200, dash.api_status(full=True))
+                elif path == "/api/state":
+                    self._json(200, dash.api_status(full=False))
                 elif path == "/api/runs":
                     self._json(200, dash.api_runs())
                 elif path.startswith("/api/runs/"):
@@ -266,7 +306,7 @@ class FpcTestDashboard(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = FpcTestDashboard()
+    node = FeasibilityTestDashboard()
     executor = MultiThreadedExecutor()
     executor.add_node(node)
     try:
