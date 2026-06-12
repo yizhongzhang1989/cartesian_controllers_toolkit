@@ -57,7 +57,7 @@ except ImportError:  # pragma: no cover
     _HAS_FJT = False
 
 try:
-    from controller_manager_msgs.srv import SwitchController
+    from controller_manager_msgs.srv import SwitchController, ListControllers
     _HAS_CM = True
 except ImportError:  # pragma: no cover
     _HAS_CM = False
@@ -93,16 +93,21 @@ class PoseCommander(Node):
         self.declare_parameter("joint_states_topic", "/joint_states")
         self.declare_parameter("target_pose_topic", "~/target_pose")
         self.declare_parameter("base_frame", "")
-        self.declare_parameter("controlled_frame", "right_arm_Link7")
-        self.declare_parameter(
-            "joints", [f"right_arm_joint{i}" for i in range(1, 8)])
-        self.declare_parameter(
-            "jtc_controller", "right_arm_joint_trajectory_controller")
-        self.declare_parameter(
-            "fpc_controller", "right_arm_forward_position_controller")
+        # Robot-INDEPENDENT: everything below is empty by default. The node
+        # builds its model from the live /robot_description and is configured at
+        # runtime (``~/configure`` topic or the dashboard) by naming just the
+        # link to control; the joints (kinematic path to that link) and the
+        # JTC/FPC controllers (matched in /controller_manager) are auto-derived.
+        # The params are still honoured if set, so an explicit launch config
+        # also works.
+        self.declare_parameter("controlled_frame", "")
+        self.declare_parameter("joints", [""])
+        self.declare_parameter("jtc_controller", "")
+        self.declare_parameter("fpc_controller", "")
         self.declare_parameter("command_mode", "jtc")          # jtc | fpc
         self.declare_parameter("start_enabled", False)         # SAFETY: off
         self.declare_parameter("switch_controllers", True)
+        self.declare_parameter("controller_manager", "/controller_manager")
         # solver
         self.declare_parameter("default_stiffness",
                                [1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
@@ -123,12 +128,14 @@ class PoseCommander(Node):
         self._js_topic = str(gp("joint_states_topic").value)
         self._target_topic = str(gp("target_pose_topic").value)
         self._base_frame = str(gp("base_frame").value or "")
-        self._frame = str(gp("controlled_frame").value)
-        self._joints = [str(j) for j in gp("joints").value]
-        self._jtc = str(gp("jtc_controller").value)
-        self._fpc = str(gp("fpc_controller").value)
+        # Active config (may start empty -> unconfigured). Filled by _apply_config.
+        self._frame = str(gp("controlled_frame").value or "")
+        self._joints = [str(j) for j in (gp("joints").value or []) if str(j)]
+        self._jtc = str(gp("jtc_controller").value or "")
+        self._fpc = str(gp("fpc_controller").value or "")
         self._mode = str(gp("command_mode").value).strip().lower()
         self._do_switch = bool(gp("switch_controllers").value)
+        self._cm = str(gp("controller_manager").value or "/controller_manager")
         self._stiffness = [float(v) for v in gp("default_stiffness").value]
         self._centering = float(gp("joint_centering_weight").value)
         self._damping = float(gp("damping").value)
@@ -156,14 +163,25 @@ class PoseCommander(Node):
         self._joint_pos: Dict[str, float] = {}
         self._js_stamp = 0.0
         self._enabled = False
-        self._last_msg = "initialised (disabled)"
+        self._configured = False
+        self._last_msg = "initialised (disabled, unconfigured)"
         self._last_target_stamp = 0.0
         self._last_solution = None
         self._last_reason = ""
         self._last_delta = 0.0
         self._goal_handle = None
+        # a pending config request (from launch params or ~/configure) to apply
+        # once the model is available
+        self._req_cfg: Optional[dict] = None
+        if self._frame:
+            self._req_cfg = {"controlled_frame": self._frame,
+                             "joints": self._joints or None,
+                             "jtc_controller": self._jtc or None,
+                             "fpc_controller": self._fpc or None,
+                             "command_mode": self._mode}
 
-        cb = ReentrantCallbackGroup()
+        self._cbg = ReentrantCallbackGroup()
+        cb = self._cbg
 
         # ---- pubs / subs ------------------------------------------------
         self.create_subscription(String, self._desc_topic,
@@ -174,20 +192,22 @@ class PoseCommander(Node):
                                  callback_group=cb)
         self.create_subscription(PoseStamped, self._target_topic,
                                  self._on_target, 10, callback_group=cb)
-        self._fpc_pub = self.create_publisher(
-            Float64MultiArray, f"/{self._fpc}/commands", 10)
+        self.create_subscription(String, "~/configure",
+                                 self._on_configure, 10, callback_group=cb)
+        # Controller-dependent endpoints are (re)created on configure.
+        self._fpc_pub = None
+        self._jtc_client = None
         self._status_pub = self.create_publisher(String, "~/status", 10)
 
-        # ---- action / switch clients ------------------------------------
-        self._jtc_client = None
-        if _HAS_FJT:
-            self._jtc_client = ActionClient(
-                self, FollowJointTrajectory,
-                f"/{self._jtc}/follow_joint_trajectory", callback_group=cb)
+        # ---- switch + list clients --------------------------------------
         self._cli_switch = None
+        self._cli_list = None
         if _HAS_CM:
             self._cli_switch = self.create_client(
-                SwitchController, "/controller_manager/switch_controller",
+                SwitchController, f"{self._cm}/switch_controller",
+                callback_group=cb)
+            self._cli_list = self.create_client(
+                ListControllers, f"{self._cm}/list_controllers",
                 callback_group=cb)
 
         # ---- TF (optional, for PoseStamped in non-base frames) ----------
@@ -219,9 +239,11 @@ class PoseCommander(Node):
             self._want_enable = False
 
         self.get_logger().info(
-            "cct_pose_commander up (DISABLED). frame=%s joints=%d mode=%s "
-            "jtc=%s fpc=%s. Call ~/enable to allow motion."
-            % (self._frame, len(self._joints), self._mode, self._jtc, self._fpc))
+            "cct_pose_commander up (DISABLED, %s). Reads /robot_description "
+            "online; configure by naming the link to control (~/configure or "
+            "the dashboard), then ~/enable. mode=%s"
+            % ("pre-configured for '%s'" % self._frame if self._frame
+               else "UNCONFIGURED", self._mode))
 
     # ------------------------------------------------------------------ #
     # Subscriptions
@@ -240,20 +262,18 @@ class PoseCommander(Node):
         except Exception as exc:  # noqa: BLE001
             self.get_logger().error("failed to build model: %r" % exc)
             return
-        # validate the configured frame + joints exist
-        missing = [j for j in self._joints if j not in model.joint_names]
-        if not model.has_frame(self._frame):
-            self.get_logger().error(
-                "controlled_frame '%s' not in URDF" % self._frame)
-            return
-        if missing:
-            self.get_logger().error("joints not in URDF: %s" % missing)
-            return
         with self._lock:
             self._model = model
         self.get_logger().info(
-            "built kinematic model: %d DOF; controlling '%s' via %d joints."
-            % (model.nq, self._frame, len(self._joints)))
+            "built kinematic model from /robot_description: %d DOF, %d links."
+            % (model.nq, len(model.link_frame_names())))
+        # Apply any pending config (launch param or an earlier ~/configure that
+        # arrived before the model).
+        with self._lock:
+            req = self._req_cfg
+        if req is not None:
+            ok, m = self._apply_config(req)
+            self._set_msg(("configured: " if ok else "configure failed: ") + m)
         if self._want_enable:
             self._want_enable = False
             self._try_enable()
@@ -266,6 +286,146 @@ class PoseCommander(Node):
             self._js_stamp = now
 
     # ------------------------------------------------------------------ #
+    # Runtime configuration (robot-independent): name the link, derive the rest
+    # ------------------------------------------------------------------ #
+    def _on_configure(self, msg: String) -> None:
+        try:
+            req = json.loads(msg.data)
+        except Exception as exc:  # noqa: BLE001
+            self._set_msg("configure ignored: bad JSON (%s)" % exc)
+            return
+        if not isinstance(req, dict) or not req.get("controlled_frame"):
+            self._set_msg("configure ignored: need {'controlled_frame': ...}")
+            return
+        with self._lock:
+            self._req_cfg = req
+            have_model = self._model is not None
+        if not have_model:
+            self._set_msg("configure queued: waiting for /robot_description")
+            return
+        ok, m = self._apply_config(req)
+        self._set_msg(("configured: " if ok else "configure failed: ") + m)
+
+    def _apply_config(self, req: dict):
+        """Validate + apply a config: name the link, derive joints+controllers.
+
+        Refused while enabled (disable first). ``joints`` and the JTC/FPC
+        controller names are optional in ``req``; when omitted they are derived
+        from the model (joints = kinematic path to the link) and from
+        /controller_manager (controllers whose required command interfaces cover
+        those joints).
+        """
+        with self._lock:
+            if self._enabled:
+                return False, "refused: disable before reconfiguring"
+            model = self._model
+        if model is None:
+            return False, "no model yet"
+
+        frame = str(req.get("controlled_frame") or "")
+        if not model.has_frame(frame):
+            return False, f"unknown link/frame '{frame}'"
+
+        # joints: explicit or derived from the kinematic path to the link
+        joints = req.get("joints")
+        if joints:
+            joints = [str(j) for j in joints if str(j)]
+            missing = [j for j in joints if j not in model.joint_names]
+            if missing:
+                return False, f"joints not in URDF: {missing}"
+        else:
+            joints = model.supporting_joints(frame)
+            if not joints:
+                return False, f"no movable joints support frame '{frame}'"
+
+        mode = str(req.get("command_mode") or self._mode).strip().lower()
+        if mode not in ("jtc", "fpc"):
+            return False, "command_mode must be 'jtc' or 'fpc'"
+
+        # controllers: explicit or discovered from /controller_manager
+        jtc = str(req.get("jtc_controller") or "")
+        fpc = str(req.get("fpc_controller") or "")
+        if not jtc or not fpc:
+            disc = self._discover_controllers(joints)
+            jtc = jtc or disc.get("jtc", "")
+            fpc = fpc or disc.get("fpc", "")
+        # the controller for the ACTIVE mode must be known; the other is optional
+        if mode == "jtc" and not jtc:
+            return False, ("no JointTrajectoryController found driving %s; "
+                           "set jtc_controller explicitly" % joints)
+        if mode == "fpc" and not fpc:
+            return False, ("no ForwardCommandController found driving %s; "
+                           "set fpc_controller explicitly" % joints)
+
+        with self._lock:
+            self._frame, self._joints = frame, joints
+            self._jtc, self._fpc, self._mode = jtc, fpc, mode
+            self._configured = True
+        self._rebuild_clients()
+        return True, (f"link={frame} joints={len(joints)} mode={mode} "
+                      f"jtc={jtc or '-'} fpc={fpc or '-'}")
+
+    def _discover_controllers(self, joints) -> dict:
+        """Find JTC + FPC controllers whose command interfaces cover ``joints``.
+
+        Uses /controller_manager/list_controllers and matches each controller's
+        ``required_command_interfaces`` (populated for active AND inactive
+        controllers) against ``{joint}/position``. Returns {'jtc':.., 'fpc':..}.
+        """
+        out = {"jtc": "", "fpc": ""}
+        if not _HAS_CM or self._cli_list is None:
+            return out
+        if not self._cli_list.wait_for_service(timeout_sec=3.0):
+            return out
+        fut = self._cli_list.call_async(ListControllers.Request())
+        done = threading.Event()
+        fut.add_done_callback(lambda _f: done.set())
+        if not done.wait(timeout=4.0):
+            return out
+        resp = fut.result()
+        want = {f"{j}/position" for j in joints}
+        best = {"jtc": -1, "fpc": -1}
+        for ctl in getattr(resp, "controller", []):
+            req_if = set(getattr(ctl, "required_command_interfaces", []) or [])
+            cover = len(want & req_if)
+            if cover == 0:
+                continue
+            t = ctl.type
+            if t.endswith("JointTrajectoryController") and cover > best["jtc"]:
+                best["jtc"] = cover
+                out["jtc"] = ctl.name
+            elif t.endswith("ForwardCommandController") and cover > best["fpc"]:
+                best["fpc"] = cover
+                out["fpc"] = ctl.name
+        return out
+
+    def _rebuild_clients(self) -> None:
+        """(Re)create the FPC publisher + JTC action client for current names."""
+        with self._lock:
+            jtc, fpc = self._jtc, self._fpc
+        # FPC command publisher
+        if self._fpc_pub is not None:
+            try:
+                self.destroy_publisher(self._fpc_pub)
+            except Exception:  # noqa: BLE001
+                pass
+            self._fpc_pub = None
+        if fpc:
+            self._fpc_pub = self.create_publisher(
+                Float64MultiArray, f"/{fpc}/commands", 10)
+        # JTC action client
+        if self._jtc_client is not None:
+            try:
+                self._jtc_client.destroy()
+            except Exception:  # noqa: BLE001
+                pass
+            self._jtc_client = None
+        if jtc and _HAS_FJT:
+            self._jtc_client = ActionClient(
+                self, FollowJointTrajectory,
+                f"/{jtc}/follow_joint_trajectory", callback_group=self._cbg)
+
+    # ------------------------------------------------------------------ #
     # Main path: target -> solve -> gate -> command
     # ------------------------------------------------------------------ #
     def _on_target(self, msg: PoseStamped) -> None:
@@ -273,6 +433,11 @@ class PoseCommander(Node):
             self._last_target_stamp = time.monotonic()
             enabled = self._enabled
             model = self._model
+            configured = self._configured
+        if not configured:
+            self._set_msg("target ignored: UNCONFIGURED (set the link via "
+                          "~/configure or the dashboard)")
+            return
         if not enabled:
             self._set_msg("target ignored: commander DISABLED (call ~/enable)")
             return
@@ -423,30 +588,39 @@ class PoseCommander(Node):
     def _try_enable(self):
         with self._lock:
             model = self._model
+            configured = self._configured
+            mode, jtc, fpc = self._mode, self._jtc, self._fpc
+        if not configured:
+            return False, ("unconfigured; name the link to control via "
+                           "~/configure or the dashboard first")
         if model is None:
             return False, "no robot_description yet; cannot enable"
         if not self._js_fresh():
             return False, "/joint_states stale; cannot enable"
         # Switch to the controller this mode commands.
-        want = self._fpc if self._mode == "fpc" else self._jtc
-        other = self._jtc if self._mode == "fpc" else self._fpc
+        want = fpc if mode == "fpc" else jtc
+        other = jtc if mode == "fpc" else fpc
+        if not want:
+            return False, f"no controller configured for mode '{mode}'"
         if self._do_switch:
-            if self._mode == "fpc":
+            if mode == "fpc":
                 # seed FPC with the CURRENT pose first so activation can't jump
                 self._seed_fpc_current()
-            if not self._switch(activate=[want], deactivate=[other]):
+            deact = [other] if other else []
+            if not self._switch(activate=[want], deactivate=deact):
                 return False, self._last_msg or "controller switch failed"
         with self._lock:
             self._enabled = True
-        self._set_msg("ENABLED (mode=%s, controller=%s)" % (self._mode, want))
+        self._set_msg("ENABLED (mode=%s, controller=%s)" % (mode, want))
         return True, "enabled"
 
     def _srv_disable(self, request, response):
         with self._lock:
             self._enabled = False
+            mode, jtc, fpc = self._mode, self._jtc, self._fpc
         # Return to JTC, which holds the current pose.
-        if self._do_switch and self._mode == "fpc":
-            self._switch(activate=[self._jtc], deactivate=[self._fpc])
+        if self._do_switch and mode == "fpc" and jtc and fpc:
+            self._switch(activate=[jtc], deactivate=[fpc])
         # cancel any in-flight JTC goal
         with self._lock:
             handle = self._goal_handle
@@ -464,11 +638,12 @@ class PoseCommander(Node):
     def _seed_fpc_current(self) -> None:
         with self._lock:
             cur = {j: self._joint_pos.get(j) for j in self._joints}
-        if any(cur[j] is None for j in self._joints):
+            pub = self._fpc_pub
+        if pub is None or any(cur[j] is None for j in self._joints):
             return
         m = Float64MultiArray()
         m.data = [float(cur[j]) for j in self._joints]
-        self._fpc_pub.publish(m)
+        pub.publish(m)
 
     def _switch(self, activate: List[str], deactivate: List[str]) -> bool:
         if not _HAS_CM or self._cli_switch is None:
@@ -512,16 +687,22 @@ class PoseCommander(Node):
         with self._lock:
             model = self._model
             enabled = self._enabled
+            configured = self._configured
             sol = self._last_solution
             msg = self._last_msg
             delta = self._last_delta
             reason = self._last_reason
+            frame, joints = self._frame, list(self._joints)
+            jtc, fpc, mode = self._jtc, self._fpc, self._mode
         status = {
             "enabled": enabled,
-            "mode": self._mode,
-            "controlled_frame": self._frame,
+            "configured": configured,
+            "mode": mode,
+            "controlled_frame": frame,
             "base_frame": self._base_frame or "(model root)",
-            "joints": list(self._joints),
+            "joints": joints,
+            "jtc_controller": jtc,
+            "fpc_controller": fpc,
             "have_model": model is not None,
             "joint_states_fresh": self._js_fresh(),
             "last_message": msg,
@@ -530,6 +711,11 @@ class PoseCommander(Node):
             "max_step_rad": self._max_step,
             "commands_robot": True,
         }
+        if model is not None:
+            # URDF introspection so the dashboard can offer link/joint choices
+            # entirely from the live robot (no offline config).
+            status["available_links"] = model.link_frame_names()
+            status["available_joints"] = list(model.joint_names)
         if sol is not None:
             status["last_solve"] = {
                 "reachable": bool(sol.reachable),

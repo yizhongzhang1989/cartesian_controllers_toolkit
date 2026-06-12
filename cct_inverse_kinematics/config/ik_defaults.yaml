@@ -30,18 +30,17 @@
 
     # ---- arm-angle (R6) -------------------------------------------------
     # Per-arm S-R-S chains for arm-angle psi (shoulder/elbow/wrist/base/tip
-    # frame names). If a robot is not S-R-S, omit it (psi simply not offered).
+    # frame names). ROBOT-INDEPENDENT: empty by default — the node solves any
+    # robot's URDF online without this. Declare chains ONLY if you want the
+    # arm-angle redundancy knob for a specific S-R-S arm, e.g. uncomment and
+    # set the frame names for your robot:
+    #   srs_chain_names: ["right_arm"]
+    #   srs_chains.right_arm.shoulder: "<your_shoulder_link>"
+    #   srs_chains.right_arm.elbow:    "<your_elbow_link>"
+    #   srs_chains.right_arm.wrist:    "<your_wrist_link>"
+    # (left empty / omitted -> the node's typed default [] is used; an empty
+    # list in YAML has no inferrable type so we do NOT set it here.)
     arm_angle_stiffness: 0.5
-    srs_chains.right_arm.shoulder: "right_arm_Link2"
-    srs_chains.right_arm.elbow: "right_arm_Link4"
-    srs_chains.right_arm.wrist: "right_arm_Link6"
-    srs_chains.right_arm.base: "right_arm_base_link"
-    srs_chains.right_arm.tip: "right_arm_Link7"
-    srs_chains.left_arm.shoulder: "left_arm_Link2"
-    srs_chains.left_arm.elbow: "left_arm_Link4"
-    srs_chains.left_arm.wrist: "left_arm_Link6"
-    srs_chains.left_arm.base: "left_arm_base_link"
-    srs_chains.left_arm.tip: "left_arm_Link7"
 
     # ---- status publish rate -------------------------------------------
     status_rate_hz: 5.0

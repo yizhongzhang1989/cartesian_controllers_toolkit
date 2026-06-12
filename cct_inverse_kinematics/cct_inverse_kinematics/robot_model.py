@@ -124,10 +124,52 @@ class RobotModel:
     def frame_names(self) -> List[str]:
         return [f.name for f in self.model.frames]
 
+    def link_frame_names(self) -> List[str]:
+        """Names of BODY frames (links) only, excluding the universe frame.
+
+        These are the operable targets a user picks ("the link to control").
+        Joint/sensor/fixed-op frames are excluded so a dashboard dropdown shows
+        just the physical links plus any attached virtual tool frames.
+        """
+        try:
+            body = int(pin.FrameType.BODY)
+        except Exception:  # pragma: no cover
+            body = None
+        out: List[str] = []
+        for f in self.model.frames:
+            if f.name == "universe":
+                continue
+            if body is None or int(f.type) == body:
+                out.append(f.name)
+        return out
+
     def q_index(self, joint_name: str) -> int:
         if joint_name not in self._jname_to_qidx:
             raise KeyError(f"unknown joint '{joint_name}'")
         return self._jname_to_qidx[joint_name]
+
+    def supporting_joints(self, frame: str) -> List[str]:
+        """Movable 1-DOF joints on the kinematic path root -> ``frame``.
+
+        This is what lets a caller specify ONLY the link to control: the joints
+        that actually move that frame are derived from the model (Pinocchio
+        ``model.supports`` of the frame's parent joint), returned in
+        configuration order. Fixed/virtual frames resolve to their parent
+        link's chain.
+        """
+        if not self.has_frame(frame):
+            raise KeyError(f"unknown frame '{frame}'")
+        fid = self.model.getFrameId(frame)
+        parent_joint = self.model.frames[fid].parent
+        movable = set(self._jname_to_qidx.keys())
+        out: List[str] = []
+        for jid in self.model.supports[parent_joint]:
+            if jid == 0:
+                continue  # universe
+            name = self.model.names[jid]
+            if name in movable:
+                out.append(name)
+        return out
 
     # ------------------------------------------------------------------ #
     # Limits

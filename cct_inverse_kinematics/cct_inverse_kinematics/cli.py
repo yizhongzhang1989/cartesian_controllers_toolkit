@@ -146,7 +146,8 @@ def main(argv=None) -> int:
 
     pv = sub.add_parser("validate", help="FK->IK round-trip success rate")
     pv.add_argument("--urdf", required=True)
-    pv.add_argument("--frame", default="right_arm_Link7")
+    pv.add_argument("--frame", required=True,
+                    help="frame to validate IK on (any link in the URDF)")
     pv.add_argument("--n", type=int, default=200)
     pv.add_argument("--seed", type=int, default=0)
     pv.add_argument("--range", type=float, default=0.7,

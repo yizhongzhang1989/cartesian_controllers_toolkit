@@ -34,10 +34,12 @@ except Exception:  # pragma: no cover
 class MarkerNode(Node):
     def __init__(self) -> None:
         super().__init__("ik_marker")
-        self.declare_parameter("frames", ["right_arm_Link7", "left_arm_Link7"])
+        self.declare_parameter("frames", [""])
         self.declare_parameter("ik_ns", "/ik_node")
         self.declare_parameter("base_frame", "base_link")
-        self._frames: List[str] = list(self.get_parameter("frames").value)
+        self._frames: List[str] = [f for f in
+                                   (self.get_parameter("frames").value or [])
+                                   if f]
         ns = self.get_parameter("ik_ns").value or "/ik_node"
         self._base = self.get_parameter("base_frame").value or "base_link"
 
@@ -52,11 +54,15 @@ class MarkerNode(Node):
             return
 
         self._server = InteractiveMarkerServer(self, "ik_markers")
+        if not self._frames:
+            self.get_logger().info(
+                "no 'frames' set — marker_node idle. Set the 'frames' param to "
+                "the link(s) you want draggable markers for (any URDF link).")
         for fr in self._frames:
             self._make_marker(fr)
         self._server.applyChanges()
         self.get_logger().info(
-            "IK interactive markers up for %s (drag in RViz; advisory only)."
+            "IK interactive markers up for [%s] (drag in RViz; advisory only)."
             % ", ".join(self._frames))
 
     def _make_marker(self, frame: str) -> None:

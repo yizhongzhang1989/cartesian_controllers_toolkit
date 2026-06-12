@@ -59,34 +59,50 @@ source install/setup.bash
 
 ## Run
 
-After a bringup is publishing `/robot_description` + `/joint_states` and the
-controllers are loaded (`robot_bringup`):
+Robot-independent: launch with **no arguments**. The node reads
+`/robot_description` online and starts **unconfigured**; you pick the link to
+control at runtime (the dashboard, or a `~/configure` message) and the joints +
+JTC/FPC controllers are auto-derived.
 
 ```bash
-# right arm, JTC mode (safe default), starts disabled
-ros2 launch cct_pose_commander commander.launch.py
+# zero-config: works on ANY robot once a bringup publishes
+# /robot_description + /joint_states and the controllers are loaded
+ros2 launch cct_pose_commander commander.launch.py            # headless
+ros2 launch cct_pose_commander commander.launch.py dashboard_port:=8180  # + UI
+```
 
-# left arm instance
+**Configure by naming only the link** (joints = kinematic path to it; JTC/FPC =
+matched in `/controller_manager`):
+
+```bash
+# via the dashboard: pick the link in the "Configure" dropdown, click Configure
+# or by topic:
+ros2 topic pub --once /cct_pose_commander/configure std_msgs/msg/String \
+    '{data: "{\"controlled_frame\": \"<your_tip_link>\", \"command_mode\": \"jtc\"}"}'
+```
+
+You may still pin a fixed config at launch (skips the runtime step):
+
+```bash
 ros2 launch cct_pose_commander commander.launch.py \
-    instance_name:=left controlled_frame:=left_arm_Link7 \
-    jtc_controller:=left_arm_joint_trajectory_controller \
-    fpc_controller:=left_arm_forward_position_controller \
-    joints:="['left_arm_joint1','left_arm_joint2','left_arm_joint3','left_arm_joint4','left_arm_joint5','left_arm_joint6','left_arm_joint7']"
+    instance_name:=left controlled_frame:=left_arm_Link7
+# joints + controllers are still auto-derived from that link unless you also
+# pass joints:=[...] / jtc_controller:= / fpc_controller:= explicitly.
 ```
 
 Enable, then send a pose:
 
 ```bash
-ros2 service call /cct_pose_commander_right/enable std_srvs/srv/Trigger
+ros2 service call /cct_pose_commander/enable std_srvs/srv/Trigger
 
 # capture the current EE pose (a no-op target — safe first check)
 ros2 run cct_pose_commander send_pose \
-    --topic /cct_pose_commander_right/target_pose --capture right_arm_Link7
+    --topic /cct_pose_commander/target_pose --capture <your_tip_link>
 
 # an absolute pose in a known frame
 ros2 run cct_pose_commander send_pose \
-    --topic /cct_pose_commander_right/target_pose \
-    --xyz 0.45 -0.78 1.06 --quat 0.3518 0.6134 -0.3518 0.6134 --frame-id base_link
+    --topic /cct_pose_commander/target_pose \
+    --xyz 0.45 -0.78 1.06 --quat 1 0 0 0 --frame-id base_link
 ```
 
 Or publish `geometry_msgs/PoseStamped` to `~/target_pose` from your own node.

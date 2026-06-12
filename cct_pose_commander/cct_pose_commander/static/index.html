@@ -13,6 +13,26 @@
   </header>
 
   <main>
+    <!-- Configure (robot-independent: pick the link from the live URDF) -->
+    <section class="card">
+      <h2>Configure <span class="warn">(pick the link to control)</span></h2>
+      <div class="row">
+        <label>controlled link
+          <select id="link-select"><option value="">— loading from URDF —</option></select>
+        </label>
+        <label>mode
+          <select id="mode-select"><option value="jtc">jtc (safe)</option><option value="fpc">fpc (stream)</option></select>
+        </label>
+        <button id="btn-configure" class="btn btn-go">Configure</button>
+      </div>
+      <div class="grid">
+        <div class="stat"><span class="k">configured</span><span id="configured" class="v pill">—</span></div>
+        <div class="stat"><span class="k">joints (auto)</span><span id="cfg-joints" class="v">—</span></div>
+        <div class="stat"><span class="k">JTC (auto)</span><span id="cfg-jtc" class="v">—</span></div>
+        <div class="stat"><span class="k">FPC (auto)</span><span id="cfg-fpc" class="v">—</span></div>
+      </div>
+    </section>
+
     <!-- Monitor -->
     <section class="card">
       <h2>Status</h2>

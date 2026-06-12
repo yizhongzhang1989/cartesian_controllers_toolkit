@@ -46,6 +46,28 @@ async function poll() {
     return;
   }
 
+  // populate the link dropdown from the live URDF (once / when it changes)
+  const links = s.available_links || [];
+  const sel = $("link-select");
+  if (links.length && sel.dataset.count != String(links.length)) {
+    const cur = sel.value;
+    sel.innerHTML = "";
+    for (const l of links) {
+      const o = document.createElement("option");
+      o.value = l; o.textContent = l; sel.appendChild(o);
+    }
+    sel.dataset.count = String(links.length);
+    // preselect the currently controlled frame if any
+    if (s.controlled_frame) sel.value = s.controlled_frame;
+    else if (cur) sel.value = cur;
+  }
+
+  pill($("configured"), !!s.configured, "configured", "not configured");
+  $("cfg-joints").textContent = (s.joints && s.joints.length)
+    ? (s.joints.length + " (" + s.joints.join(", ") + ")") : "—";
+  $("cfg-jtc").textContent = s.jtc_controller || "—";
+  $("cfg-fpc").textContent = s.fpc_controller || "—";
+
   pill($("enabled"), !!s.enabled, "ENABLED", "disabled");
   $("enabled").className = "v pill " + (s.enabled ? "pill-warn" : "");
   $("mode").textContent = s.mode ?? "—";
@@ -69,6 +91,16 @@ async function poll() {
 // ---- actions --------------------------------------------------------------
 async function doTrigger(enable) {
   const out = await postJSON(enable ? "/api/enable" : "/api/disable", {});
+  setMsg((out.ok ? "OK: " : "FAILED: ") + (out.message || ""));
+  poll();
+}
+
+async function doConfigure() {
+  const link = $("link-select").value;
+  const mode = $("mode-select").value;
+  if (!link) { setMsg("pick a controlled link first"); return; }
+  const out = await postJSON("/api/configure",
+    { controlled_frame: link, command_mode: mode });
   setMsg((out.ok ? "OK: " : "FAILED: ") + (out.message || ""));
   poll();
 }
@@ -106,6 +138,7 @@ async function doJog(axis, sign) {
 }
 
 // ---- wire up --------------------------------------------------------------
+$("btn-configure").onclick = doConfigure;
 $("btn-enable").onclick = () => doTrigger(true);
 $("btn-disable").onclick = () => doTrigger(false);
 $("btn-capture").onclick = doCapture;

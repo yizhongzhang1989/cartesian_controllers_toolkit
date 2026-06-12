@@ -13,18 +13,18 @@
     target_pose_topic: "~/target_pose"   # geometry_msgs/PoseStamped in
     base_frame: ""                       # "" = use URDF root as solve frame
 
-    # ---- controlled group (one arm per node instance) ------------------
-    controlled_frame: "right_arm_Link7"
-    joints:
-      - right_arm_joint1
-      - right_arm_joint2
-      - right_arm_joint3
-      - right_arm_joint4
-      - right_arm_joint5
-      - right_arm_joint6
-      - right_arm_joint7
-    jtc_controller: "right_arm_joint_trajectory_controller"
-    fpc_controller: "right_arm_forward_position_controller"
+    # ---- controlled group --------------------------------------------------
+    # ROBOT-INDEPENDENT: leave these empty. The commander reads the live URDF
+    # and is configured at runtime (the dashboard, or publish JSON to
+    # ~/configure) by naming ONLY the link to control; the joints (kinematic
+    # path to that link) and the JTC/FPC controllers (matched in
+    # /controller_manager) are auto-derived. Set them here only to pin a fixed
+    # config at launch.
+    controlled_frame: ""
+    joints: [""]
+    jtc_controller: ""
+    fpc_controller: ""
+    controller_manager: "/controller_manager"
 
     # ---- command mode / engagement -------------------------------------
     command_mode: "jtc"        # "jtc" (safe, discrete) | "fpc" (streaming)

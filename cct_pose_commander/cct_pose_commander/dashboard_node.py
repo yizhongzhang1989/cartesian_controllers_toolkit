@@ -71,6 +71,8 @@ class CommanderDashboard(Node):
                                  10, callback_group=self._cbg)
         self._target_pub = self.create_publisher(
             PoseStamped, f"{self._ns}/target_pose", 10)
+        self._configure_pub = self.create_publisher(
+            String, f"{self._ns}/configure", 10)
         self._cli_enable = self.create_client(
             Trigger, f"{self._ns}/enable", callback_group=self._cbg)
         self._cli_disable = self.create_client(
@@ -115,6 +117,22 @@ class CommanderDashboard(Node):
         with self._lock:
             s = self._status or {}
         return s.get("controlled_frame")
+
+    def configure(self, cfg: dict) -> dict:
+        """Relay a config request to the commander's ``~/configure`` topic.
+
+        ``cfg`` needs at least ``controlled_frame``; joints + controllers are
+        auto-derived by the commander from the URDF + controller_manager.
+        """
+        frame = (cfg or {}).get("controlled_frame")
+        if not frame:
+            return {"ok": False, "message": "need 'controlled_frame'"}
+        m = String()
+        m.data = json.dumps(cfg)
+        for _ in range(3):
+            self._configure_pub.publish(m)
+            time.sleep(0.02)
+        return {"ok": True, "message": f"configure sent (link={frame})"}
 
     def call_trigger(self, enable: bool, timeout: float = 5.0) -> dict:
         cli = self._cli_enable if enable else self._cli_disable
@@ -219,6 +237,9 @@ class CommanderDashboard(Node):
 
             def do_POST(self):
                 path = urlparse(self.path).path
+                if path == "/api/configure":
+                    return self._send(200, json.dumps(
+                        dash.configure(self._read_json())))
                 if path == "/api/enable":
                     return self._send(200, json.dumps(dash.call_trigger(True)))
                 if path == "/api/disable":

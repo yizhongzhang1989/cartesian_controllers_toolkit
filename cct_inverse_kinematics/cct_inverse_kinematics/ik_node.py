@@ -146,15 +146,25 @@ class IKNode(Node):
         """Read srs_chains.<name>.{shoulder,elbow,wrist,base,tip} params.
 
         Arm names are taken from the ``srs_chain_names`` string-array param
-        (default right_arm/left_arm). For each, the per-field dotted params are
-        declared-then-read so this works regardless of param-load ordering.
+        (EMPTY by default — the node is robot-independent and offers arm-angle
+        only for chains the user explicitly declares). For each, the per-field
+        dotted params are declared-then-read so this works regardless of
+        param-load ordering.
         """
         chains: Dict[str, SRSChain] = {}
+        # Declare with an explicit STRING_ARRAY descriptor: an empty-list default
+        # has no inferrable type in rclpy (raises on get), so we must type it.
         try:
-            self.declare_parameter("srs_chain_names", ["right_arm", "left_arm"])
+            from rcl_interfaces.msg import ParameterDescriptor, ParameterType
+            self.declare_parameter(
+                "srs_chain_names", [],
+                ParameterDescriptor(type=ParameterType.PARAMETER_STRING_ARRAY))
         except Exception:
             pass
-        names = list(self.get_parameter("srs_chain_names").value or [])
+        try:
+            names = list(self.get_parameter("srs_chain_names").value or [])
+        except Exception:
+            names = []
         for arm in names:
             def g(field, default=""):
                 p = f"srs_chains.{arm}.{field}"
@@ -444,6 +454,12 @@ class IKNode(Node):
             "srs_chains": list(self._srs_chains.keys()),
             "advisory_only": True,
         }
+        if model is not None:
+            # Introspection so a dashboard can populate selection dropdowns
+            # entirely from the live URDF (no offline config). Links are the
+            # operable targets; joints are the movable DOF.
+            status["links"] = model.link_frame_names()
+            status["joints"] = list(model.joint_names)
         if model is not None and have_js:
             with self._lock:
                 q = self._current_seed(model)
