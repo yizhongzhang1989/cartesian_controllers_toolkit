@@ -10,7 +10,10 @@ setup(
     # dashboard_node.py can resolve them via Path(__file__).parent / "static"
     # whether installed normally or via `colcon build --symlink-install`.
     package_data={
-        package_name: ['static/*.html', 'static/*.css', 'static/*.js'],
+        package_name: ['static/*.html', 'static/*.css', 'static/*.js',
+                       'static/vendor/*.js',
+                       'static/vendor/addons/controls/*.js',
+                       'static/vendor/addons/loaders/*.js'],
     },
     include_package_data=True,
     data_files=[

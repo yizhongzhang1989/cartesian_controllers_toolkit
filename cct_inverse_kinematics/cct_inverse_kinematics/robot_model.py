@@ -209,6 +209,37 @@ class RobotModel:
         pin.updateFramePlacement(self.model, self.data, fid)
         return self.data.oMf[fid].copy()
 
+    def all_link_transforms(self, q: np.ndarray) -> Dict[str, list]:
+        """Return {link_frame_name: 4x4 row-major nested list} for one config.
+
+        Single FK + frame-placement pass, then read every BODY-frame placement.
+        Pairs with the 3D viewer, which renders each visual at
+        ``link_tf[link] * local_visual_origin``.
+        """
+        q = np.asarray(q, dtype=float).reshape(self.nq)
+        pin.forwardKinematics(self.model, self.data, q)
+        pin.updateFramePlacements(self.model, self.data)
+        out: Dict[str, list] = {}
+        try:
+            body = int(pin.FrameType.BODY)
+        except Exception:  # pragma: no cover
+            body = None
+        for i, f in enumerate(self.model.frames):
+            if f.name == "universe":
+                continue
+            if body is not None and int(f.type) != body:
+                continue
+            M = self.data.oMf[i]
+            R = M.rotation
+            p = M.translation
+            out[f.name] = [
+                [float(R[0, 0]), float(R[0, 1]), float(R[0, 2]), float(p[0])],
+                [float(R[1, 0]), float(R[1, 1]), float(R[1, 2]), float(p[1])],
+                [float(R[2, 0]), float(R[2, 1]), float(R[2, 2]), float(p[2])],
+                [0.0, 0.0, 0.0, 1.0],
+            ]
+        return out
+
     def frame_jacobian(self, q: np.ndarray, frame: str) -> np.ndarray:
         """6xnq frame Jacobian in LOCAL_WORLD_ALIGNED (lin rows, then ang rows)."""
         q = np.asarray(q, dtype=float).reshape(self.nq)

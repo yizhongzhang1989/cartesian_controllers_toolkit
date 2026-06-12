@@ -33,7 +33,10 @@ tasks.py       Task / RelativeTask / ArmAngleTask / VirtualFrame / Solution
 arm_angle.py   S-R-S arm-angle psi compute/report + desired-psi task (R6)
 relative.py    dual-arm relative-pose task (R9)
 ik_node.py     headless ROS node: reads URDF + joint states, JSON solve API (advisory)
-dashboard_node.py  optional web UI (http.server) — pure client of the ROS API
+dashboard_node.py  optional 3D web UI (http.server + Three.js) — renders the
+               robot from /robot_description meshes, ghosts the IK solution,
+               and drives every solve function; pure client of the ROS API
+static/        index.html + app.js (Three.js viewer) + dashboard.css + vendor/
 ```
 
 The math is one **weighted, damped, box-constrained least-squares** problem
@@ -59,9 +62,41 @@ source install/setup.bash
 ```bash
 # after a robot (or mock) bringup is publishing /robot_description + /joint_states
 ros2 launch cct_inverse_kinematics ik.launch.py
-# with the web dashboard (http://localhost:8160):
+# with the 3D web dashboard (http://localhost:8160):
 ros2 launch cct_inverse_kinematics ik_with_dashboard.launch.py
 ```
+
+## 3D dashboard
+
+The dashboard (`dashboard_node`, port 8160) renders the live robot in 3D and is
+a visual test-bench for the whole package. It is **advisory-only** — it never
+commands the robot; every solve is delegated to `ik_node` over its ROS API.
+
+It builds its own Pinocchio model (for per-link FK) and serves the robot's STL
+meshes (resolving `package://` via the ament index), mirroring `src/rm_dashboard`.
+The browser (Three.js + OrbitControls + STLLoader) renders:
+
+* the **current** robot at the live `/joint_states` configuration (solid);
+* a translucent **ghost** of the last IK solution;
+* a **target-pose marker** (sphere + triad) and an axis triad at the world origin.
+
+The view auto-frames the robot on load; **fit view** (top-right) re-centres it
+at any time, and the canvas tracks the window/layout on resize.
+
+Controls exercise every node function: pick any link/frame, **Capture current**
+pose, edit target xyz + rpy, per-DOF **stiffness** sliders + presets
+(pose / position-only / pos+yaw), **active-joint** group masking (auto-derived
+per-arm), **virtual tool frame** (R2) — naming a tool frame makes it selectable
+as the operated frame and **Capture current** reports its pose — **arm-angle ψ**
+(R6, needs `srs_chains` on `ik_node`, and the solved ψ is shown in the result),
+and the dual-arm **relative-pose** constraint (R9). The result panel shows the
+reachability verdict, reason, position/orientation residual, iterations,
+manipulability, σ_min and Δq.
+
+Backend HTTP API: `GET /api/state` (model + per-link transforms + visuals + ik
+status), `GET /mesh?pkg=&path=`, `POST /api/fk` (capture a frame's pose),
+`POST /api/solve` (relays to `ik_node`, returns the solution + a ghost
+`solution_link_tf`).
 
 ### Solve over the JSON API
 
