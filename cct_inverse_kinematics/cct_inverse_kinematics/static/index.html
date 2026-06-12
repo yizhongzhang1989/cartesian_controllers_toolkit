@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>cct_inverse_kinematics dashboard</title>
+  <link rel="stylesheet" href="dashboard.css"/>
+</head>
+<body>
+  <header>
+    <h1>Inverse Kinematics <span class="tag">advisory only — never commands the robot</span></h1>
+    <div id="conn" class="pill pill-bad">connecting…</div>
+  </header>
+
+  <main>
+    <section class="panel">
+      <h2>Target task</h2>
+      <div class="row">
+        <label>Frame
+          <select id="frame"></select>
+        </label>
+        <button id="capture" title="Fill target with the frame's current pose">capture current</button>
+      </div>
+      <div class="row">
+        <label>x <input id="px" type="number" step="0.01"/></label>
+        <label>y <input id="py" type="number" step="0.01"/></label>
+        <label>z <input id="pz" type="number" step="0.01"/></label>
+      </div>
+      <div class="row">
+        <label>qw <input id="qw" type="number" step="0.01" value="1"/></label>
+        <label>qx <input id="qx" type="number" step="0.01" value="0"/></label>
+        <label>qy <input id="qy" type="number" step="0.01" value="0"/></label>
+        <label>qz <input id="qz" type="number" step="0.01" value="0"/></label>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Per-DOF stiffness <span class="hint">(template + sliders)</span></h2>
+      <div class="row">
+        <label>template
+          <select id="template">
+            <option value="pose">pose (6-DOF)</option>
+            <option value="point">position-only</option>
+            <option value="position_yaw">position + yaw</option>
+            <option value="axis_gaze">axis-gaze</option>
+          </select>
+        </label>
+        <label>active joints
+          <select id="group">
+            <option value="">all</option>
+          </select>
+        </label>
+      </div>
+      <div id="stiff" class="stiff-grid"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Redundancy — arm angle ψ <span class="hint">(R6)</span></h2>
+      <div id="armangles" class="kv"></div>
+      <div class="row">
+        <label>chain <select id="psi_chain"><option value="">(none)</option></select></label>
+        <label>ψ&nbsp;des <input id="psi_des" type="number" step="0.05" value="0"/></label>
+        <label>stiffness <input id="psi_k" type="number" step="0.1" value="0.5"/></label>
+      </div>
+    </section>
+
+    <section class="panel solve">
+      <button id="solve" class="primary">Solve</button>
+      <div id="verdict" class="verdict"></div>
+      <div id="result" class="kv"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Solver status</h2>
+      <pre id="status">waiting…</pre>
+    </section>
+  </main>
+  <script src="dashboard.js"></script>
+</body>
+</html>

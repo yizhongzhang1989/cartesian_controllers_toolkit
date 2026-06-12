@@ -1,0 +1,47 @@
+:root {
+  --bg: #0f1419; --panel: #1b2330; --ink: #e6edf3; --muted: #8b98a5;
+  --accent: #2f81f7; --ok: #2ea043; --bad: #d1242f; --warn: #d29922;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; font-family: system-ui, sans-serif; background: var(--bg);
+  color: var(--ink); font-size: 14px;
+}
+header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 20px; background: #111722; border-bottom: 1px solid #30363d;
+}
+h1 { font-size: 18px; margin: 0; }
+h2 { font-size: 14px; margin: 0 0 10px; color: var(--accent); }
+.tag { font-size: 11px; color: var(--warn); font-weight: normal; margin-left: 8px; }
+.hint { font-size: 11px; color: var(--muted); font-weight: normal; }
+main {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 20px;
+  max-width: 1100px; margin: 0 auto;
+}
+.panel { background: var(--panel); border: 1px solid #30363d; border-radius: 8px; padding: 16px; }
+.panel.solve { grid-column: 1 / -1; }
+.row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+label { display: flex; flex-direction: column; font-size: 12px; color: var(--muted); gap: 4px; }
+input, select {
+  background: #0d1117; color: var(--ink); border: 1px solid #30363d;
+  border-radius: 6px; padding: 6px 8px; font-size: 13px; width: 90px;
+}
+select { width: auto; min-width: 130px; }
+button {
+  background: #21262d; color: var(--ink); border: 1px solid #30363d;
+  border-radius: 6px; padding: 8px 14px; cursor: pointer; font-size: 13px;
+}
+button:hover { border-color: var(--accent); }
+button.primary { background: var(--accent); border-color: var(--accent); font-weight: 600; }
+.stiff-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.stiff-grid .cell { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.stiff-grid input[type=range] { width: 100%; }
+.pill { padding: 4px 10px; border-radius: 12px; font-size: 12px; }
+.pill-ok { background: rgba(46,160,67,.2); color: var(--ok); }
+.pill-bad { background: rgba(209,36,47,.2); color: var(--bad); }
+.verdict { font-size: 16px; font-weight: 600; margin: 10px 0; }
+.verdict.ok { color: var(--ok); }
+.verdict.bad { color: var(--bad); }
+.kv { font-family: ui-monospace, monospace; font-size: 12px; white-space: pre-wrap; color: var(--muted); }
+pre { background: #0d1117; padding: 12px; border-radius: 6px; overflow: auto; max-height: 220px; font-size: 11px; color: var(--muted); }
