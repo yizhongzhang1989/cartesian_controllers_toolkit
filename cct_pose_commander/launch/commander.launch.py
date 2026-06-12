@@ -19,7 +19,7 @@ commander instance (omit it / leave empty to run headless), e.g.::
 """
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, LogInfo
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import (LaunchConfiguration, PathJoinSubstitution,
@@ -27,32 +27,74 @@ from launch.substitutions import (LaunchConfiguration, PathJoinSubstitution,
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
+# Robot-NEUTRAL launch defaults, taken from the toolkit's centralized config
+# (cct_common -> config/toolkit_defaults.yaml, section ``cct_pose_commander``).
+# The robot-specific selection (controlled_frame / joints / controllers) is NOT
+# here: it defaults empty and is chosen at runtime (dashboard or ~/configure),
+# auto-derived from the URDF + /controller_manager.
+_FALLBACKS = {
+    "command_mode": "jtc",
+    "start_enabled": "false",
+    "base_frame": "",
+    "switch_controllers": "true",
+    "controller_manager": "/controller_manager",
+    "max_joint_speed": 0.5,
+    "min_move_time": 0.5,
+    "max_step_rad": 0.8,
+    "joint_states_stale_after": 0.5,
+    "status_rate_hz": 10.0,
+    "dashboard_base_frame": "base_link",
+}
+
+
+def _defaults():
+    try:
+        from cct_common.config_manager import get_config  # type: ignore
+        cfg = get_config()
+        if cfg.has("cct_pose_commander"):
+            sec = cfg.section("cct_pose_commander")
+            return ({k: sec.get(k, v) for k, v in _FALLBACKS.items()},
+                    f"loaded from {cfg.config_path}")
+        return (dict(_FALLBACKS), "FALLBACK (no 'cct_pose_commander:' section)")
+    except Exception as exc:  # noqa: BLE001
+        return (dict(_FALLBACKS), f"FALLBACK ({type(exc).__name__}: {exc})")
+
 
 def generate_launch_description():
+    d, source = _defaults()
     args = [
         DeclareLaunchArgument("instance_name", default_value="right"),
-        DeclareLaunchArgument("controlled_frame", default_value="right_arm_Link7"),
-        DeclareLaunchArgument(
-            "jtc_controller",
-            default_value="right_arm_joint_trajectory_controller"),
-        DeclareLaunchArgument(
-            "fpc_controller",
-            default_value="right_arm_forward_position_controller"),
-        DeclareLaunchArgument("command_mode", default_value="jtc"),
-        DeclareLaunchArgument("start_enabled", default_value="false"),
-        DeclareLaunchArgument("base_frame", default_value=""),
-        DeclareLaunchArgument(
-            "joints",
-            default_value="['right_arm_joint1','right_arm_joint2',"
-                          "'right_arm_joint3','right_arm_joint4',"
-                          "'right_arm_joint5','right_arm_joint6',"
-                          "'right_arm_joint7']"),
+        # Robot-specific: empty => start UNCONFIGURED, pick the link at runtime
+        # (dashboard / ~/configure); joints + controllers are auto-derived.
+        DeclareLaunchArgument("controlled_frame", default_value=""),
+        DeclareLaunchArgument("jtc_controller", default_value=""),
+        DeclareLaunchArgument("fpc_controller", default_value=""),
+        DeclareLaunchArgument("joints", default_value="['']"),
+        # Robot-neutral, from central config:
+        DeclareLaunchArgument("command_mode",
+                              default_value=str(d["command_mode"])),
+        DeclareLaunchArgument("start_enabled",
+                              default_value=str(d["start_enabled"])),
+        DeclareLaunchArgument("base_frame", default_value=str(d["base_frame"])),
+        DeclareLaunchArgument("switch_controllers",
+                              default_value=str(d["switch_controllers"])),
+        DeclareLaunchArgument("controller_manager",
+                              default_value=str(d["controller_manager"])),
+        DeclareLaunchArgument("max_joint_speed",
+                              default_value=str(d["max_joint_speed"])),
+        DeclareLaunchArgument("min_move_time",
+                              default_value=str(d["min_move_time"])),
+        DeclareLaunchArgument("max_step_rad",
+                              default_value=str(d["max_step_rad"])),
+        DeclareLaunchArgument("joint_states_stale_after",
+                              default_value=str(d["joint_states_stale_after"])),
+        DeclareLaunchArgument("status_rate_hz",
+                              default_value=str(d["status_rate_hz"])),
         # Empty => headless (no dashboard). Any port => also launch the dashboard
         # wired to this commander instance.
         DeclareLaunchArgument("dashboard_port", default_value=""),
-        # TF frame the dashboard captures/jogs in (a concrete frame, not the
-        # commander's possibly-empty solve base_frame).
-        DeclareLaunchArgument("dashboard_base_frame", default_value="base_link"),
+        DeclareLaunchArgument("dashboard_base_frame",
+                              default_value=str(d["dashboard_base_frame"])),
     ]
 
     node = Node(
@@ -70,6 +112,14 @@ def generate_launch_description():
             "start_enabled": LaunchConfiguration("start_enabled"),
             "base_frame": LaunchConfiguration("base_frame"),
             "joints": LaunchConfiguration("joints"),
+            "switch_controllers": LaunchConfiguration("switch_controllers"),
+            "controller_manager": LaunchConfiguration("controller_manager"),
+            "max_joint_speed": LaunchConfiguration("max_joint_speed"),
+            "min_move_time": LaunchConfiguration("min_move_time"),
+            "max_step_rad": LaunchConfiguration("max_step_rad"),
+            "joint_states_stale_after":
+                LaunchConfiguration("joint_states_stale_after"),
+            "status_rate_hz": LaunchConfiguration("status_rate_hz"),
         }],
     )
 
@@ -89,4 +139,6 @@ def generate_launch_description():
             ["'", LaunchConfiguration("dashboard_port"), "' != ''"])),
     )
 
-    return LaunchDescription(args + [node, dashboard])
+    return LaunchDescription(
+        args + [LogInfo(msg=f"[cct_pose_commander] config: {source}"),
+                node, dashboard])

@@ -4,6 +4,13 @@ The solver reads ``/robot_description`` and ``/joint_states`` and exposes its
 JSON solve API + ``~/solution`` / ``~/status`` outputs. It is advisory only and
 never commands the robot.
 
+Launch-arg defaults come from the toolkit's centralized config under the
+``cct_inverse_kinematics:`` section (``cct_common`` ->
+``config/toolkit_defaults.yaml``, overridable by the workspace
+``robot_config.yaml`` or ``ROBOT_CONFIG_PATH``). Solver tuning (tolerances,
+stiffness, arm-angle chains) stays in the package's ``config/ik_defaults.yaml``.
+CLI overrides win over both.
+
 Examples::
 
     ros2 launch cct_inverse_kinematics ik.launch.py
@@ -13,22 +20,54 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, LogInfo
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+
+# Hard-coded fallbacks if the central config is missing or lacks a key.
+_FALLBACKS = {
+    "robot_description_topic": "/robot_description",
+    "joint_states_topic": "/joint_states",
+    "base_frame": "",
+}
+
+
+def _defaults():
+    """Return (defaults_dict, source_str) from the centralized toolkit config."""
+    try:
+        from cct_common.config_manager import get_config  # type: ignore
+    except Exception as exc:  # noqa: BLE001
+        return (dict(_FALLBACKS),
+                f"FALLBACK (could not import cct_common.config_manager: "
+                f"{type(exc).__name__}: {exc})")
+    try:
+        cfg = get_config()
+    except Exception as exc:  # noqa: BLE001
+        return (dict(_FALLBACKS),
+                f"FALLBACK (could not load config: {type(exc).__name__}: {exc})")
+    if not cfg.has("cct_inverse_kinematics"):
+        return (dict(_FALLBACKS),
+                f"FALLBACK (no 'cct_inverse_kinematics:' section in "
+                f"{cfg.config_path})")
+    sec = cfg.section("cct_inverse_kinematics")
+    return ({k: sec.get(k, v) for k, v in _FALLBACKS.items()},
+            f"loaded from {cfg.config_path}")
 
 
 def generate_launch_description() -> LaunchDescription:
     pkg = get_package_share_directory("cct_inverse_kinematics")
-    defaults = os.path.join(pkg, "config", "ik_defaults.yaml")
+    params = os.path.join(pkg, "config", "ik_defaults.yaml")
+    d, source = _defaults()
 
     return LaunchDescription([
-        DeclareLaunchArgument("params_file", default_value=defaults),
-        DeclareLaunchArgument("base_frame", default_value=""),
+        DeclareLaunchArgument("params_file", default_value=params),
+        DeclareLaunchArgument("base_frame", default_value=str(d["base_frame"])),
         DeclareLaunchArgument(
-            "robot_description_topic", default_value="/robot_description"),
+            "robot_description_topic",
+            default_value=str(d["robot_description_topic"])),
         DeclareLaunchArgument(
-            "joint_states_topic", default_value="/joint_states"),
+            "joint_states_topic", default_value=str(d["joint_states_topic"])),
+        LogInfo(msg=f"[cct_inverse_kinematics] config: {source}"),
         Node(
             package="cct_inverse_kinematics",
             executable="ik_node",

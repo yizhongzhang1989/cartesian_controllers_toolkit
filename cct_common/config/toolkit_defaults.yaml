@@ -119,3 +119,62 @@ ft_sensor_dashboard:
   push_rate: 30.0                 # SSE updates per second
   reliability: "best_effort"
   title: ""
+
+# -----------------------------------------------------------------------------
+# robot_feasibility_test -- headless engine (+ optional dashboard) that scores
+# a forward-position-controller's force-control readiness
+# -----------------------------------------------------------------------------
+robot_feasibility_test:
+  # engine connectivity
+  joint_states_topic: "/joint_states"
+  wrench_topic: ""                # "" = no wrench scoring; set your FT topic
+  controller_manager: "/controller_manager"
+  controller_name: ""             # "" = auto/operator-selected at runtime
+  send_rate: 200.0                # Hz command stream
+  default_limit_deg: 8.0          # per-joint test excursion cap
+  report_dir: "~/.ros/robot_feasibility_test/runs"
+  status_rate: 10.0
+  # dashboard (engine launch passes dashboard_port through; dashboard launch
+  # serves the UI). Robot-neutral.
+  host: "0.0.0.0"
+  dashboard_port: 8140
+  engine_node: "feasibility_test_engine"
+
+# -----------------------------------------------------------------------------
+# cct_inverse_kinematics -- advisory IK solver (+ optional dashboard).
+# ROBOT-INDEPENDENT: the node builds its model from the live /robot_description;
+# nothing here names a robot. The link to solve is chosen at runtime / per
+# request, NOT here. Solver tuning lives in the package's ik_defaults.yaml.
+# -----------------------------------------------------------------------------
+cct_inverse_kinematics:
+  robot_description_topic: "/robot_description"
+  joint_states_topic: "/joint_states"
+  base_frame: ""                  # "" = use the URDF root as the solve frame
+  host: "0.0.0.0"
+  dashboard_port: 8160
+
+# -----------------------------------------------------------------------------
+# cct_pose_commander -- target pose -> IK -> robot motion (safety-gated).
+# ROBOT-INDEPENDENT: only robot-neutral defaults here. The link to control and
+# its joints/controllers are chosen at RUNTIME (dashboard or ~/configure) and
+# auto-derived from the URDF + /controller_manager -- never named here.
+# -----------------------------------------------------------------------------
+cct_pose_commander:
+  robot_description_topic: "/robot_description"
+  joint_states_topic: "/joint_states"
+  base_frame: ""                  # "" = use the URDF root as the solve frame
+  command_mode: "jtc"             # "jtc" (safe, discrete) | "fpc" (streaming)
+  start_enabled: false            # SAFETY: stay disabled until ~/enable
+  switch_controllers: true
+  controller_manager: "/controller_manager"
+  # safety gates
+  max_joint_speed: 0.5            # rad/s -- caps JTC move speed
+  min_move_time: 0.5              # s
+  max_step_rad: 0.8               # reject a solve that jumps any joint > this
+  joint_states_stale_after: 0.5   # s
+  status_rate_hz: 10.0
+  # dashboard ("" on the commander launch = headless; the dashboard launch
+  # defaults its own port to this value)
+  host: "0.0.0.0"
+  dashboard_port: 8180
+  dashboard_base_frame: "base_link"   # concrete TF frame for capture/jog
