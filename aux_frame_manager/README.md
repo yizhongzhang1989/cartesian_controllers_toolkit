@@ -25,17 +25,103 @@ until the URDF arrives and gate activation on it. So the canonical topic is the
 single, consistent source — offset edits and frame additions published here
 reach every controller (and TF, via the RSP mirror).
 
-## Frame sources (Req: config file AND direct argument)
+## Interfaces — what controls the URDF
 
-* **Config file** — `aux_frames_section` names a top-level key in
+The canonical URDF is driven entirely through **ROS topics + parameters**; the
+node exposes no services of its own (it *calls* `robot_state_publisher`'s
+`set_parameters`). All `~/...` names below resolve under the node, i.e.
+`/aux_frame_manager/...` by default.
+
+### Topics
+
+| dir | topic (default) | type | QoS | purpose |
+|---|---|---|---|---|
+| sub | `base_urdf_topic` = `/robot_description` | `std_msgs/String` | latched¹ | manufacturer URDF in (the base to augment) |
+| **sub** | **`~/set_aux_frames`** | **`std_msgs/String`** (JSON) | depth 10 | **live control: replace the whole aux-frame list** |
+| pub | `output_topic` = `/cartesian/robot_description` | `std_msgs/String` | latched¹ | the canonical augmented URDF out — controllers read this |
+| pub | `~/status` | `std_msgs/String` (JSON) | latched¹ | last action / current frames / health |
+
+¹ latched = `RELIABLE` + `TRANSIENT_LOCAL`, depth 1 — a late subscriber still
+receives the current value.
+
+The node additionally **calls** `/<robot_state_publisher>/set_parameters`
+(`rcl_interfaces/srv/SetParameters`) to mirror the canonical URDF into TF/RViz
+when `update_robot_state_publisher:=true`.
+
+### `~/set_aux_frames` — the live control interface
+
+This is **the** interface for operating the URDF at runtime. Publish a **JSON
+array** of frame objects; the message **replaces the entire managed aux-frame
+list** (it is not an incremental patch), so:
+
+* **edit an offset** → send the full list with that frame's `xyz` / `rpy` changed;
+* **add a frame** → send the list with the new frame included;
+* **remove a frame** → send the list without it (an empty array `[]` removes all,
+  making the canonical URDF equal to the bare base).
+
+Each frame object is `{"name": str, "parent": str, "xyz": [x,y,z], "rpy": [r,p,y]}`
+— `name` and `parent` are required; `xyz` (metres) and `rpy` (radians) default to
+`[0,0,0]`. `parent` must be a base-URDF link or another aux frame. Frames may be
+listed in **any order** — a child may precede its parent; the manager
+topologically sorts them before building.
+
+```bash
+# Set ft_sensor_link 5 cm above link_6, keep compliance_link on it.
+# (full list — this REPLACES whatever frames the manager currently holds)
+ros2 topic pub --once /aux_frame_manager/set_aux_frames std_msgs/msg/String \
+  '{data: "[{\"name\":\"ft_sensor_link\",\"parent\":\"link_6\",\"xyz\":[0,0,0.05]},{\"name\":\"compliance_link\",\"parent\":\"ft_sensor_link\"}]"}'
+
+# Remove every aux frame (canonical URDF collapses to the base):
+ros2 topic pub --once /aux_frame_manager/set_aux_frames std_msgs/msg/String '{data: "[]"}'
+```
+
+On each message the manager strips its previously-managed frames from the stored
+base, re-augments with the new list, **validates** (parent exists, no cycle, no
+duplicate, chain reachable), then republishes `output_topic` and re-mirrors to
+RSP. An **invalid** list is rejected: the previous canonical URDF is kept and
+`~/status` reports the error.
+
+> The dashboards are just clients of this topic. The aux_frame 3D dashboard
+> (`dashboard_port`) and the `cartesian_controller_dashboard` "Tool frames"
+> panel both publish here; the latter also writes the values back to
+> `robot_config.yaml` so they persist to the next launch.
+
+### `~/status` — feedback
+
+Latched `std_msgs/String` JSON, republished on every (re)build:
+
+```json
+{"message": "ok: published canonical URDF with frames [ft_sensor_link, compliance_link]",
+ "output_topic": "/cartesian/robot_description",
+ "base_topic": "/robot_description",
+ "aux_frames": ["ft_sensor_link", "compliance_link"],
+ "have_canonical": true,
+ "mirror_to_rsp": true}
+```
+
+`message` starts with `ok:` on success or `error:` when a frame set was rejected
+(the canonical output is then unchanged). `aux_frames` is the list of frame
+names currently in the canonical URDF — read it to confirm an edit landed.
+
+### Startup / static frame sources
+
+For frames known at launch time (instead of, or in addition to, live edits):
+
+* **config file** — `aux_frames_section` names a top-level key in
   `config/robot_config.yaml` whose `aux_frames:` list (each
-  `{name, parent, xyz, rpy}`) is read via `cct_common`.
-* **Direct argument** — `aux_frames` is an **rcl-safe compact** string of
+  `{name, parent, xyz, rpy}`) is read via `cct_common`;
+* **direct argument** — `aux_frames` is an **rcl-safe compact** string of
   `name:parent[:x,y,z[:r,p,yw]]` specs separated by `;` (a bracketed YAML/JSON
   string does *not* survive the rcl parameter parser). It overrides/extends the
   config-file frames (override by name, append new).
-* **Live edit** — publish a JSON frame list on `~/set_aux_frames`
-  (`std_msgs/String`) to change offsets or add/remove frames at runtime.
+
+A live `~/set_aux_frames` message supersedes both for the rest of the session.
+
+### Guard output (`aux_frame_guard`)
+
+| dir | topic | type | purpose |
+|---|---|---|---|
+| pub | `<output_topic>_ready` = `/cartesian/robot_description_ready` | `std_msgs/Bool` | latched `true` once the endpoint/reference frames are present **and** in the `base->ee` chain |
 
 ## Run
 
@@ -85,14 +171,22 @@ ros2 launch aux_frame_manager aux_frame_manager.launch.py \
 
 ## Key parameters (`aux_frame_manager`)
 
+Set at launch (read once at startup); the live `~/set_aux_frames` topic is the
+runtime control surface.
+
 | param | default | meaning |
 |---|---|---|
 | `base_urdf_topic` | `/robot_description` | manufacturer URDF in |
 | `output_topic` | `/cartesian/robot_description` | canonical URDF out (latched) |
 | `update_robot_state_publisher` | `true` | mirror canonical URDF to RSP (one TF truth) |
+| `robot_state_publisher_name` | `robot_state_publisher` | RSP node whose `robot_description` is mirrored |
 | `aux_frames_section` | `""` | config-file section holding the `aux_frames` list |
-| `config_file` | `""` (auto) | path to the config YAML |
+| `config_file` | `""` (auto) | path to the config YAML (`""` → `cct_common` auto-resolve) |
 | `aux_frames` | `""` | compact `name:parent[:x,y,z[:r,p,yw]]` specs, `;`-separated |
+
+`aux_frame_guard` parameters: `robot_description_topic`
+(`/cartesian/robot_description`), `robot_base_link` (`base_link`),
+`end_effector_link` (`""`), `required_frames` (`['']`).
 
 ## Loop safety
 
