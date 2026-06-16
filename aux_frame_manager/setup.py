@@ -6,6 +6,19 @@ setup(
     name=package_name,
     version='0.1.0',
     packages=find_packages(exclude=['test']),
+    # Ship the optional dashboard's static web assets (HTML/CSS/JS + the
+    # Three.js vendor bundle for the 3D viewer) inside the package so
+    # dashboard_node.py can resolve them via Path(__file__).parent / "static"
+    # whether installed normally or via `colcon build --symlink-install`.
+    package_data={
+        package_name: [
+            'static/*.html', 'static/*.css', 'static/*.js',
+            'static/vendor/*.js',
+            'static/vendor/addons/controls/*.js',
+            'static/vendor/addons/loaders/*.js',
+        ],
+    },
+    include_package_data=True,
     data_files=[
         ('share/ament_index/resource_index/packages',
          ['resource/' + package_name]),
@@ -29,6 +42,7 @@ setup(
         'console_scripts': [
             'aux_frame_manager = aux_frame_manager.aux_frame_manager_node:main',
             'aux_frame_guard = aux_frame_manager.aux_frame_guard:main',
+            'aux_frame_dashboard = aux_frame_manager.dashboard_node:main',
         ],
     },
 )

@@ -18,7 +18,7 @@ actionable error otherwise.
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 
 
@@ -39,8 +39,14 @@ def generate_launch_description() -> LaunchDescription:
         # Guard: the FZI endpoint + reference frames to verify are in-chain.
         DeclareLaunchArgument("robot_base_link", default_value="base_link"),
         DeclareLaunchArgument("end_effector_link", default_value=""),
-        DeclareLaunchArgument("required_frames", default_value="[]"),
+        # NOTE: default is ['']  (one empty string), NOT []  -- an empty list
+        # is rejected by the ROS 2 parameter parser ("Expected a non-empty
+        # sequence"). The guard filters out the empty entry, so [''] behaves
+        # like "no required frames".
+        DeclareLaunchArgument("required_frames", default_value="['']"),
         DeclareLaunchArgument("enable_guard", default_value="true"),
+        # Optional dashboard (3D view + live editor); started when set.
+        DeclareLaunchArgument("dashboard_port", default_value=""),
     ]
 
     manager = Node(
@@ -75,4 +81,21 @@ def generate_launch_description() -> LaunchDescription:
         }],
     )
 
-    return LaunchDescription(args + [manager, guard])
+    dashboard = Node(
+        package="aux_frame_manager",
+        executable="aux_frame_dashboard",
+        name="aux_frame_dashboard",
+        output="screen",
+        condition=IfCondition(
+            PythonExpression(["'", LaunchConfiguration("dashboard_port"),
+                              "' != ''"])),
+        parameters=[{
+            "port": LaunchConfiguration("dashboard_port"),
+            "manager_ns": "/aux_frame_manager",
+            "base_frame": LaunchConfiguration("robot_base_link"),
+            "canonical_topic": LaunchConfiguration("output_topic"),
+            "base_urdf_topic": LaunchConfiguration("base_urdf_topic"),
+        }],
+    )
+
+    return LaunchDescription(args + [manager, guard, dashboard])

@@ -69,6 +69,19 @@ Then configure the FZI controllers with:
   `robotChainContains` constraint), latches `<topic>_ready` (Bool), and prints
   an actionable error naming missing frames if not — instead of FZI's cryptic
   "robot_description is empty".
+* **`aux_frame_dashboard`** *(optional)* — a small web UI (Three.js 3D canvas)
+  that draws the canonical robot and **highlights the added aux frames** (orange
+  marker + triad + label) versus the original links (grey meshes), plus a live
+  editor to add / edit / remove frames at runtime. It is a thin client of the
+  manager: it reads the canonical + base URDF topics and `~/status`, takes link
+  poses from **TF** (no extra FK dependency), and drives `~/set_aux_frames`. Off
+  by default; start it by passing `dashboard_port` to either launch file.
+
+```bash
+# manager + dashboard on http://localhost:8160
+ros2 launch aux_frame_manager aux_frame_manager.launch.py \
+    aux_frames:='op_tip:compliance_link:0,0,0.05' dashboard_port:=8160
+```
 
 ## Key parameters (`aux_frame_manager`)
 
