@@ -11,9 +11,24 @@ aux frames be added **without a custom bringup**.
 
 ```
 basic bringup ──/robot_description──▶ aux_frame_manager ──/cartesian/robot_description (latched)──▶ FZI controllers
- (manufacturer URDF, unchanged)        strip+augment+validate        │  (urdf_from_topic:=true, single source)
-                                       single writer                  └─▶ robot_state_publisher (mirror, TF/RViz)
+ (bare URDF, the bringup's input)      strip+augment+validate        │  (urdf_from_topic:=true, single source)
+                                       single writer                  └─▶ robot_state_publisher ──/robot_description──▶ TF / RViz / MoveIt
+                                                                          (mirror: RSP re-publishes the AUGMENTED URDF)
 ```
+
+> **What ends up on `/robot_description`?** The *augmented* URDF, not the bare
+> one. The bringup hands RSP the bare URDF at startup, but the manager then
+> mirrors its canonical (augmented) URDF back into RSP via `set_parameters`
+> (`update_robot_state_publisher:=true`, the default), so RSP re-publishes the
+> augmented URDF on `/robot_description`. In steady state **both**
+> `/robot_description` and `/cartesian/robot_description` carry the same
+> augmented URDF — the bare URDF only exists transiently at startup and inside
+> the manager (its stripped base copy). The two topics differ by **owner /
+> purpose**, not content: `/robot_description` is RSP's (drives TF, RViz,
+> MoveIt, FT-frame lookups); `/cartesian/robot_description` is the manager's
+> latched single-source for the controllers. Set
+> `update_robot_state_publisher:=false` to leave `/robot_description` bare (then
+> only `/cartesian/robot_description` has the aux frames, and TF will not).
 
 ## Why a topic (not the controller_manager URDF)
 
