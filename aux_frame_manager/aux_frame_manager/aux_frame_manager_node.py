@@ -171,6 +171,10 @@ class AuxFrameManager(Node):
                 "previous output)" % exc)
             self._publish_status("error: %s" % exc)
             return
+        # Adopt the canonical (dependency-ordered) frame list so the stored
+        # state matches what we publish regardless of the order a client sent
+        # (a child may arrive before its parent; build_canonical_urdf sorts it).
+        self._frames = norm
         self._managed_names |= {f["name"] for f in norm}
         if canonical == self._canonical:
             return  # no change (incl. RSP echo of our own output) -> loop-safe

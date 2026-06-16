@@ -3,7 +3,8 @@
 import pytest
 
 from aux_frame_manager.frame_source import (build_canonical_urdf, merge_frames,
-                                            normalize_frame, parse_inline_frames,
+                                            normalize_frame, order_frames,
+                                            parse_inline_frames,
                                             parse_spec_string, strip_aux_frames,
                                             validate_frames)
 
@@ -115,6 +116,44 @@ def test_strip_removes_only_managed_frames():
 def test_build_canonical_rejects_invalid():
     with pytest.raises(ValueError):
         build_canonical_urdf(BASE, [{"name": "x", "parent": "no_such_link"}])
+
+
+def test_order_frames_child_before_parent():
+    """A child supplied BEFORE its parent must be reordered (regression: a
+    dashboard that moves the edited row to the end of the list sends
+    [compliance_link, ft_sensor_link] when ft_sensor_link is edited)."""
+    out_of_order = [
+        {"name": "compliance_link", "parent": "ft_sensor_link"},
+        {"name": "ft_sensor_link", "parent": "link_6"},
+    ]
+    ordered = order_frames(out_of_order, ["base_link", "link_6"])
+    names = [f["name"] for f in ordered]
+    assert names == ["ft_sensor_link", "compliance_link"]
+
+
+def test_build_canonical_accepts_child_before_parent():
+    """The full build must succeed regardless of input frame order."""
+    out_of_order = [
+        {"name": "compliance_link", "parent": "ft_sensor_link", "xyz": [0, 0, 0.3]},
+        {"name": "ft_sensor_link", "parent": "link_6", "xyz": [0, 0, 0.05]},
+    ]
+    canon, norm = build_canonical_urdf(BASE, out_of_order)
+    # canonical chain is correct and the returned frames are dependency-ordered
+    assert [f["name"] for f in norm] == ["ft_sensor_link", "compliance_link"]
+    from aux_frame_manager.frame_source import extract_chain_links
+    chain = extract_chain_links(canon, "base_link", "compliance_link")
+    assert chain == ["base_link", "link_6", "ft_sensor_link", "compliance_link"]
+
+
+def test_order_frames_detects_cycle():
+    with pytest.raises(ValueError):
+        order_frames([{"name": "a", "parent": "b"},
+                      {"name": "b", "parent": "a"}], ["base_link"])
+
+
+def test_order_frames_unknown_parent():
+    with pytest.raises(ValueError):
+        order_frames([{"name": "a", "parent": "nope"}], ["base_link"])
 
 
 def test_strip_extra_removes_since_removed_frames():

@@ -211,6 +211,53 @@ def strip_aux_frames(urdf_xml: str, names: Sequence[str]) -> str:
     return ET.tostring(root, encoding="unicode")
 
 
+def order_frames(frames: Sequence[Mapping],
+                 base_link_names: Sequence[str]) -> List[Dict]:
+    """Topologically sort aux frames so each one follows what it hangs off.
+
+    Aux frames may be supplied in ANY order -- a child can appear before its
+    parent (e.g. a dashboard that moves an edited row to the end of its list,
+    so editing the FIRST frame in a parent->child chain would otherwise push it
+    after its own child). ``augment_urdf`` / ``validate_frames`` require the
+    parent to come first, so reorder here. The sort is stable: a frame is
+    emitted as soon as its parent (a base-URDF link, or an earlier aux frame)
+    is available, otherwise input order is preserved.
+
+    Raises ``ValueError`` if a frame's parent is neither a base link nor another
+    aux frame (unknown parent), or if the aux frames form a cycle.
+    """
+    norm = [normalize_frame(f) for f in (frames or [])]
+    if not norm:
+        return []
+    base = set(base_link_names or [])
+    aux_names = {f["name"] for f in norm}
+    for f in norm:
+        if f["parent"] not in base and f["parent"] not in aux_names:
+            raise ValueError(
+                f"aux frame '{f['name']}' parent '{f['parent']}' is not an "
+                f"existing link or another aux frame")
+    ordered: List[Dict] = []
+    placed = set(base)
+    remaining = list(norm)
+    while remaining:
+        progressed = False
+        still: List[Dict] = []
+        for f in remaining:
+            # a frame whose name was already placed earlier in the list is a
+            # duplicate; leave it for validate_frames to reject (don't drop it)
+            if f["parent"] in placed:
+                ordered.append(f)
+                placed.add(f["name"])
+                progressed = True
+            else:
+                still.append(f)
+        if not progressed:
+            cyc = [f["name"] for f in remaining]
+            raise ValueError(f"cyclic aux-frame parent chain among {cyc}")
+        remaining = still
+    return ordered
+
+
 def build_canonical_urdf(incoming_urdf: str,
                          frames: Sequence[Mapping],
                          strip_extra: Optional[Sequence[str]] = None
@@ -228,7 +275,11 @@ def build_canonical_urdf(incoming_urdf: str,
     names = [f["name"] for f in norm]
     strip_names = set(names) | set(strip_extra or [])
     base = strip_aux_frames(incoming_urdf, strip_names)
-    ok, msg = validate_frames(norm, _link_names(base))
+    base_links = _link_names(base)
+    # Order-independent: sort so each aux frame follows its parent before we
+    # validate/augment (clients may send a child ahead of its parent).
+    norm = order_frames(norm, base_links)
+    ok, msg = validate_frames(norm, base_links)
     if not ok:
         raise ValueError(msg)
     return augment_urdf(base, norm), norm

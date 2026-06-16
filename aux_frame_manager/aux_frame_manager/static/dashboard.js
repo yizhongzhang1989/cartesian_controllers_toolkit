@@ -57,8 +57,10 @@ function loadForm(f) {
 
 // merge one frame into the live list (replace by name), return new list
 function mergeFrame(frame) {
-  const out = liveFrames.filter((f) => f.name !== frame.name);
-  out.push(frame);
+  const out = liveFrames.slice();
+  const idx = out.findIndex((f) => f.name === frame.name);
+  if (idx >= 0) out[idx] = frame;   // update in place -> keep parent->child order
+  else out.push(frame);             // genuinely new frame -> append
   return out;
 }
 
