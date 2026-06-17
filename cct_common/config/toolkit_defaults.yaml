@@ -140,8 +140,30 @@ robot_feasibility_test:
   dashboard_port: 8140
   engine_node: "feasibility_test_engine"
 
-  # dashboard ("" on the commander launch = headless; the dashboard launch
-  # defaults its own port to this value)
-  host: "0.0.0.0"
-  dashboard_port: 8180
-  dashboard_base_frame: "base_link"   # concrete TF frame for capture/jog
+# -----------------------------------------------------------------------------
+# aux_frame_manager -- single-writer of the canonical augmented URDF.
+# Appends fixed-joint "aux" frames to the manufacturer URDF and serves the
+# result on a latched topic for the FZI cartesian controllers, mirroring it to
+# robot_state_publisher for TF. Two launch files share this section:
+#   * aux_frame_manager.launch.py      -- manager (+ optional dashboard)
+#   * cartesian_urdf_source.launch.py  -- manager + pre-activate guard (+ dashboard)
+# NOTE: the structured aux_frames LIST is NOT here -- it lives under the bringup
+# package's own section, named by `aux_frames_section`. Booleans are quoted
+# because these values become launch-argument strings.
+# -----------------------------------------------------------------------------
+aux_frame_manager:
+  base_urdf_topic: "/robot_description"            # manufacturer URDF in
+  output_topic: "/cartesian/robot_description"     # canonical augmented URDF out
+  update_robot_state_publisher: "true"             # mirror canonical URDF to rsp (TF)
+  robot_state_publisher_name: "robot_state_publisher"
+  aux_frames_section: ""    # top-level key whose `aux_frames:` list to append ("" = none)
+  aux_frames: ""            # inline compact override 'name:parent[:x,y,z[:r,p,yw]]' (';'-sep)
+  config_file: ""           # force a specific yaml ("" = auto-resolve via cct_common)
+  # root TF frame: cartesian_urdf_source exposes it as `robot_base_link`,
+  # aux_frame_manager as `base_frame` (both default to base_link).
+  robot_base_link: "base_link"
+  base_frame: "base_link"
+  enable_guard: "true"      # cartesian_urdf_source.launch.py pre-activate guard
+  end_effector_link: ""     # FZI endpoint to verify in-chain ("" = skip)
+  required_frames: "['']"   # extra frames to verify ("['']" = none; NOT [] which rcl rejects)
+  dashboard_port: ""        # optional web dashboard: "" = off, else a port (e.g. 8160)

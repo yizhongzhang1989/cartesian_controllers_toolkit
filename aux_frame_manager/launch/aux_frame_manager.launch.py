@@ -15,30 +15,86 @@ the canonical URDF with the added aux frames highlighted, plus a live editor):
 """
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, LogInfo
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 
 
+# Hard-coded fallbacks, used when the central config (cct_common -> the
+# 'aux_frame_manager:' section of robot_config.yaml / toolkit_defaults.yaml)
+# is missing or omits a key. Values are strings because they become launch
+# argument default_values; the node coerces types from its own declarations.
+_FALLBACKS = {
+    "base_urdf_topic": "/robot_description",
+    "output_topic": "/cartesian/robot_description",
+    "update_robot_state_publisher": "true",
+    "robot_state_publisher_name": "robot_state_publisher",
+    "config_file": "",
+    "aux_frames_section": "",
+    "aux_frames": "",
+    "dashboard_port": "",
+    "base_frame": "base_link",
+}
+
+
+def _defaults():
+    """Return (defaults_dict, source_str) from the central config.
+
+    Reads the ``aux_frame_manager:`` section via ``cct_common`` and overlays
+    it on ``_FALLBACKS``; on any failure returns the fallbacks plus a string
+    explaining why, so the launch still works on a fresh checkout.
+    """
+    try:
+        from cct_common.config_manager import get_config  # type: ignore
+    except Exception as exc:  # noqa: BLE001
+        return (dict(_FALLBACKS),
+                f"FALLBACK (could not import cct_common.config_manager: "
+                f"{type(exc).__name__}: {exc})")
+    try:
+        cfg = get_config()
+    except Exception as exc:  # noqa: BLE001
+        return (dict(_FALLBACKS),
+                f"FALLBACK (could not load config: "
+                f"{type(exc).__name__}: {exc})")
+    if not cfg.has("aux_frame_manager"):
+        return (dict(_FALLBACKS),
+                f"FALLBACK (no 'aux_frame_manager:' section in {cfg.config_path})")
+    sec = cfg.section("aux_frame_manager")
+    return ({k: sec.get(k, v) for k, v in _FALLBACKS.items()},
+            f"loaded from {cfg.config_path}")
+
+
 def generate_launch_description() -> LaunchDescription:
+    d, source = _defaults()
+
     args = [
-        DeclareLaunchArgument("base_urdf_topic", default_value="/robot_description"),
+        DeclareLaunchArgument("base_urdf_topic",
+                              default_value=str(d["base_urdf_topic"])),
         DeclareLaunchArgument("output_topic",
-                              default_value="/cartesian/robot_description"),
-        DeclareLaunchArgument("update_robot_state_publisher", default_value="true"),
+                              default_value=str(d["output_topic"])),
+        DeclareLaunchArgument("update_robot_state_publisher",
+                              default_value=str(d["update_robot_state_publisher"])),
         DeclareLaunchArgument("robot_state_publisher_name",
-                              default_value="robot_state_publisher"),
-        DeclareLaunchArgument("config_file", default_value=""),
-        DeclareLaunchArgument("aux_frames_section", default_value=""),
-        DeclareLaunchArgument("aux_frames", default_value=""),
+                              default_value=str(d["robot_state_publisher_name"])),
+        DeclareLaunchArgument("config_file",
+                              default_value=str(d["config_file"])),
+        DeclareLaunchArgument("aux_frames_section",
+                              default_value=str(d["aux_frames_section"])),
+        DeclareLaunchArgument("aux_frames",
+                              default_value=str(d["aux_frames"])),
         DeclareLaunchArgument(
-            "dashboard_port", default_value="",
+            "dashboard_port", default_value=str(d["dashboard_port"]),
             description="If set, also start the web dashboard on this port."),
         DeclareLaunchArgument(
-            "base_frame", default_value="base_link",
+            "base_frame", default_value=str(d["base_frame"]),
             description="Root TF frame the dashboard expresses link poses in."),
     ]
+
+    log = LogInfo(msg=(
+        f"[aux_frame_manager] config: {source}; "
+        f"base='{d['base_urdf_topic']}' -> canonical='{d['output_topic']}'; "
+        f"aux_frames_section='{d['aux_frames_section']}'"))
 
     node = Node(
         package="aux_frame_manager",
@@ -76,4 +132,4 @@ def generate_launch_description() -> LaunchDescription:
         }],
     )
 
-    return LaunchDescription(args + [node, dashboard])
+    return LaunchDescription([log] + args + [node, dashboard])
