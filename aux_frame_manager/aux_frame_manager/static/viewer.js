@@ -6,8 +6,10 @@
 // lookup base_frame -> link; no Pinocchio / no server FK), and clearly marks
 // which frames are ORIGINAL (links present in the manufacturer base URDF,
 // drawn as neutral grey meshes) versus ADDED aux frames (the links the manager
-// injected — drawn as a highlighted sphere + triad + label, plus an attachment
-// line to their parent link).
+// injected — drawn as a highlighted orange sphere + triad + label, plus an
+// attachment line to their parent link). Pre-existing fixed frames baked into
+// the launch URDF (also editable here) get the same marker in cyan, so every
+// editable frame is visible and clickable regardless of who created it.
 //
 // View options (checkboxes): meshes / labels / per-link frames / aux-only.
 // Click a mesh to select it; the selection is echoed to the editor panel via
@@ -20,6 +22,7 @@ const $ = (id) => document.getElementById(id);
 
 const AUX_COLOR = 0xffb454;     // added aux frames (orange)
 const AUX_COLOR_CSS = "#ffb454";
+const BASE_COLOR = 0x34c3ff;    // pre-existing (launch-URDF) editable frames (cyan)
 
 // ---- scene --------------------------------------------------------------
 const canvas = $("viewer");
@@ -56,8 +59,9 @@ const frameAxes = {};   // link -> AxesHelper
 const auxMarkers = {};  // aux link -> {group, line}
 const labelPool = [];   // reusable label divs (clustered, not per-link)
 let allLinks = [];      // link names from the snapshot
-let auxSet = new Set(); // aux link names (added by the manager)
-let auxDefs = {};       // aux name -> {name, parent, xyz, rpy}
+let auxSet = new Set(); // ADDED aux frames (the aux-only filter + orange marker)
+let editDefs = {};      // EVERY editable frame -> {name,parent,xyz,rpy,source}
+let meshLinks = new Set(); // links that already have a mesh (no marker needed)
 let jointTree = [];     // [{parent, child, type}] for the skeleton lines
 let didFit = false;
 
@@ -80,8 +84,8 @@ function setSelected(link, notify) {
   selectedLink = link || "";
   if ($("sel-link")) $("sel-link").textContent = selectedLink || "—";
   if (notify && typeof window.__onPickLink === "function") {
-    window.__onPickLink(selectedLink, auxSet.has(selectedLink),
-                        auxDefs[selectedLink] || null);
+    window.__onPickLink(selectedLink, !!editDefs[selectedLink],
+                        editDefs[selectedLink] || null);
   }
 }
 window.__viewerSelect = (link) => setSelected(link, false);
@@ -159,23 +163,31 @@ function ensureAuxMarker(name) {
 // world transform of an aux frame: prefer TF; else parent_tf @ local offset
 function auxWorld(name, linkTf) {
   if (linkTf[name]) return rosMat(linkTf[name]);
-  const def = auxDefs[name];
+  const def = editDefs[name];
   if (def && linkTf[def.parent]) {
     return rosMat(linkTf[def.parent]).multiply(localMatrix(def.xyz, def.rpy, null));
   }
   return null;
 }
 const _av = new THREE.Vector3();
+// editable frames that have no mesh of their own need an explicit marker so
+// they are visible AND clickable (e.g. a bare ft_sensor_link, added or baked in)
+function markerNames() {
+  return Object.keys(editDefs).filter((n) => !meshLinks.has(n));
+}
 function placeAux(linkTf) {
-  const live = new Set(auxSet);
+  const live = new Set(markerNames());
   for (const name of live) {
     const m = ensureAuxMarker(name);
     const w = auxWorld(name, linkTf);
     if (!w) { m.group.visible = false; m.line.visible = false; continue; }
     m.group.visible = true; m.group.matrix.copy(w);
-    m.ball.material.color.setHex(name === selectedLink ? 0x39d353 : AUX_COLOR);
+    const isBase = (editDefs[name] || {}).source === "base";
+    const col = name === selectedLink ? 0x39d353 : (isBase ? BASE_COLOR : AUX_COLOR);
+    m.ball.material.color.setHex(col);
+    m.line.material.color.setHex(col);
     // attachment line parent-origin -> aux-origin
-    const def = auxDefs[name];
+    const def = editDefs[name];
     const p = def && linkTf[def.parent];
     if (p) {
       _av.setFromMatrixPosition(w);
@@ -375,8 +387,9 @@ async function poll() {
     window.__hasMeshes = !!s.has_meshes;
     allLinks = s.links || Object.keys(tf);
     auxSet = new Set(s.aux_links || []);
-    auxDefs = {};
-    for (const f of (s.aux_frames || [])) auxDefs[f.name] = f;
+    editDefs = {};
+    for (const f of (s.editable_frames || s.aux_frames || [])) editDefs[f.name] = f;
+    meshLinks = new Set((s.visuals || []).map((v) => v.link));
     jointTree = s.joint_tree || [];
     if (s.has_meshes) ensureMeshes(s.visuals || []);
     ensureFrames(tf);

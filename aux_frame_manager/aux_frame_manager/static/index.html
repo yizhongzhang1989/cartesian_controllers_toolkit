@@ -28,6 +28,7 @@
       <div class="legend">
         <span class="lg"><i class="sw sw-orig"></i>original link</span>
         <span class="lg"><i class="sw sw-aux"></i>added aux frame</span>
+        <span class="lg"><i class="sw sw-base"></i>pre-existing frame</span>
       </div>
       <div class="vf-opts">
         <label><input type="checkbox" id="show-mesh" checked> meshes</label>
@@ -56,6 +57,11 @@
 
     <section class="card">
       <h2>Edit / add a frame <span class="warn sm">(live)</span></h2>
+      <div class="muted sm" style="margin:-2px 0 8px">
+        Any fixed frame is editable. For a <b>pre-existing</b> frame only the
+        offset (xyz / rpy) is applied; <b>parent</b> is used only when creating a
+        new frame.
+      </div>
       <div class="form">
         <label>name <input id="f-name" placeholder="e.g. op_tip"></label>
         <label>parent
@@ -80,11 +86,11 @@
     </section>
 
     <section class="card">
-      <h2>Live frame list</h2>
-      <div id="edit-list" class="edit-list muted sm">no aux frames</div>
+      <h2>Editable frames</h2>
+      <div id="edit-list" class="edit-list muted sm">no editable frames</div>
       <div class="btn-row">
-        <button id="btn-apply" class="btn" title="re-send the current aux frame list">Re-apply</button>
-        <button id="btn-clear" class="btn btn-warn" title="remove ALL aux frames">Clear all</button>
+        <button id="btn-apply" class="btn" title="re-send the added aux frame list">Re-apply added</button>
+        <button id="btn-clear" class="btn btn-warn" title="remove ALL added aux frames (pre-existing frames stay)">Clear added</button>
       </div>
       <div id="ops-msg" class="msg muted sm"></div>
     </section>

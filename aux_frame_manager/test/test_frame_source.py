@@ -2,7 +2,8 @@
 
 import pytest
 
-from aux_frame_manager.frame_source import (build_canonical_urdf, merge_frames,
+from aux_frame_manager.frame_source import (apply_overrides, build_canonical_urdf,
+                                            list_fixed_frames, merge_frames,
                                             normalize_frame, order_frames,
                                             parse_inline_frames,
                                             parse_spec_string, strip_aux_frames,
@@ -204,3 +205,64 @@ def test_in_chain_detects_missing_and_offchain():
     # unknown ee -> no path
     ok2, msg2 = check_frames_in_chain(canon, "base_link", "no_such", [])
     assert not ok2 and "no kinematic path" in msg2
+
+
+def _fixed_by_name(urdf):
+    return {f["name"]: f for f in list_fixed_frames(urdf)}
+
+
+def test_list_fixed_frames_only_fixed():
+    """Only links held by a FIXED joint are returned; the revolute link_6 (and
+    the root base_link, which has no parent joint) are excluded."""
+    assert list_fixed_frames(BASE) == []   # BASE has only a revolute joint
+    frames = [{"name": "ft_sensor_link", "parent": "link_6", "xyz": [0, 0, 0.1]},
+              {"name": "compliance_link", "parent": "ft_sensor_link"}]
+    canon, _ = build_canonical_urdf(BASE, frames)
+    fixed = _fixed_by_name(canon)
+    assert set(fixed) == {"ft_sensor_link", "compliance_link"}
+    assert "link_6" not in fixed                       # revolute -> not editable
+    assert fixed["ft_sensor_link"]["parent"] == "link_6"
+    assert fixed["ft_sensor_link"]["xyz"] == [0, 0, 0.1]
+
+
+def test_apply_overrides_edits_existing_offset():
+    """A pre-existing fixed frame's origin is rewritten in place (this is how a
+    baked-in launch-URDF frame becomes editable)."""
+    canon, _ = build_canonical_urdf(
+        BASE, [{"name": "ft_sensor_link", "parent": "link_6"}])
+    assert _fixed_by_name(canon)["ft_sensor_link"]["xyz"] == [0, 0, 0]
+    urdf2, updated, missing = apply_overrides(
+        canon, {"ft_sensor_link": {"xyz": [0, 0, 0.05], "rpy": [0, 0, 0]}})
+    assert updated == ["ft_sensor_link"] and missing == []
+    assert _fixed_by_name(urdf2)["ft_sensor_link"]["xyz"] == [0, 0, 0.05]
+
+
+def test_apply_overrides_empty_is_noop():
+    canon, _ = build_canonical_urdf(
+        BASE, [{"name": "ft_sensor_link", "parent": "link_6"}])
+    urdf2, updated, missing = apply_overrides(canon, {})
+    assert urdf2 == canon and updated == [] and missing == []
+
+
+def test_apply_overrides_reports_missing_and_skips_movable():
+    """Names with no FIXED joint -- a typo or a movable-joint link like the
+    revolute link_6 -- are reported missing and left untouched."""
+    canon, _ = build_canonical_urdf(
+        BASE, [{"name": "ft_sensor_link", "parent": "link_6"}])
+    urdf2, updated, missing = apply_overrides(
+        canon, {"link_6": {"xyz": [1, 2, 3]}, "nope": {"xyz": [0, 0, 1]}})
+    assert updated == []
+    assert set(missing) == {"link_6", "nope"}
+    # structure unchanged: same fixed frames with the same offsets
+    assert _fixed_by_name(urdf2) == _fixed_by_name(canon)
+
+
+def test_apply_overrides_idempotent_loop_safe():
+    """Re-applying the same override on the manager's own echo is a no-op (the
+    manager re-applies overrides on every build)."""
+    canon, _ = build_canonical_urdf(
+        BASE, [{"name": "ft_sensor_link", "parent": "link_6"}])
+    ov = {"ft_sensor_link": {"xyz": [0, 0, 0.05]}}
+    once, _, _ = apply_overrides(canon, ov)
+    twice, updated, _ = apply_overrides(once, ov)
+    assert once == twice and updated == ["ft_sensor_link"]

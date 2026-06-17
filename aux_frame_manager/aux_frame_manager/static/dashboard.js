@@ -12,7 +12,11 @@
 
 const $ = (id) => document.getElementById(id);
 
-let liveFrames = [];     // [{name, parent, xyz, rpy}] from the latest snapshot
+// liveFrames now holds EVERY editable (fixed-joint) frame, each tagged
+// source = "added" (this manager appended it) | "base" (already in the launch
+// URDF). Added frames are managed via ~/set_aux_frames (the whole-list replace);
+// any single frame's offset -- added OR base -- is edited via ~/edit_frame.
+let liveFrames = [];     // [{name, parent, xyz, rpy, source}] from the snapshot
 let links = [];          // all canonical link names (parent choices)
 let lastParentFill = ""; // signature to avoid rebuilding the <select> each poll
 
@@ -20,10 +24,28 @@ function fmt3(a) {
   return "[" + (a || [0, 0, 0]).map((v) => Number(v).toFixed(3)).join(", ") + "]";
 }
 
+// the managed (added) subset, stripped to the manager's frame schema -- the
+// only frames ~/set_aux_frames may carry (sending a base frame here would make
+// the manager augment a duplicate, so remove/clear/re-apply use this).
+function addedOnly(keep) {
+  return liveFrames
+    .filter((f) => f.source === "added" && (!keep || keep(f)))
+    .map((f) => ({ name: f.name, parent: f.parent, xyz: f.xyz, rpy: f.rpy }));
+}
+
 async function postFrames(frames) {
   const r = await fetch("/api/set_frames", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ frames }),
+  });
+  return r.json();
+}
+
+// edit ONE frame's offset (added or pre-existing); manager routes by name
+async function postEdit(frame) {
+  const r = await fetch("/api/edit_frame", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ frame }),
   });
   return r.json();
 }
@@ -55,41 +77,40 @@ function loadForm(f) {
   $("f-yaw").value = (f.rpy && f.rpy[2]) || 0;
 }
 
-// merge one frame into the live list (replace by name), return new list
-function mergeFrame(frame) {
-  const out = liveFrames.slice();
-  const idx = out.findIndex((f) => f.name === frame.name);
-  if (idx >= 0) out[idx] = frame;   // update in place -> keep parent->child order
-  else out.push(frame);             // genuinely new frame -> append
-  return out;
-}
-
 // ---- actions ------------------------------------------------------------
 async function onAdd() {
   const f = readForm();
   if (!f.name) { setMsg("edit-msg", "name is required", "err"); return; }
-  if (!f.parent) { setMsg("edit-msg", "pick a parent link", "err"); return; }
+  // an existing frame (added or pre-existing) is edited by offset only; a brand
+  // new frame needs a parent to hang off.
+  const existing = liveFrames.find((x) => x.name === f.name);
+  if (!existing && !f.parent) {
+    setMsg("edit-msg", "pick a parent link for a new frame", "err"); return;
+  }
   setMsg("edit-msg", "sending…", "muted");
-  const res = await postFrames(mergeFrame(f));
+  const res = await postEdit(f);   // manager routes: managed / override / add
   setMsg("edit-msg", res.message || (res.ok ? "sent" : "failed"),
          res.ok ? "ok" : "err");
 }
 async function onRemove(name) {
   setMsg("ops-msg", "removing " + name + "…", "muted");
-  const res = await postFrames(liveFrames.filter((f) => f.name !== name));
+  // only added frames can be removed (base frames belong to the launch URDF)
+  const res = await postFrames(addedOnly((f) => f.name !== name));
   setMsg("ops-msg", res.message || (res.ok ? "removed" : "failed"),
          res.ok ? "ok" : "err");
 }
 async function onClear() {
-  if (!liveFrames.length) { setMsg("ops-msg", "already empty", "muted"); return; }
-  setMsg("ops-msg", "clearing all…", "muted");
-  const res = await postFrames([]);
+  if (!addedOnly().length) {
+    setMsg("ops-msg", "no added frames to clear", "muted"); return;
+  }
+  setMsg("ops-msg", "clearing added frames…", "muted");
+  const res = await postFrames([]);   // base frames stay; only added are cleared
   setMsg("ops-msg", res.message || (res.ok ? "cleared" : "failed"),
          res.ok ? "ok" : "err");
 }
 async function onReapply() {
   setMsg("ops-msg", "re-applying…", "muted");
-  const res = await postFrames(liveFrames);
+  const res = await postFrames(addedOnly());
   setMsg("ops-msg", res.message || (res.ok ? "re-applied" : "failed"),
          res.ok ? "ok" : "err");
 }
@@ -121,21 +142,25 @@ function renderList() {
   const host = $("edit-list"); if (!host) return;
   if (!liveFrames.length) {
     host.className = "edit-list muted sm";
-    host.textContent = "no aux frames";
+    host.textContent = "no editable frames";
     return;
   }
   host.className = "edit-list";
   host.innerHTML = liveFrames.map((f) => {
     const safe = f.name.replace(/"/g, "&quot;");
-    return `<div class="erow" data-name="${safe}">
+    const base = f.source === "base";
+    const badge = base ? '<span class="badge badge-base">pre-existing</span>'
+                       : '<span class="badge badge-added">added</span>';
+    const rm = base ? ""
+      : '<button class="mini mini-warn" data-act="remove">remove</button>';
+    return `<div class="erow ${base ? "erow-base" : ""}" data-name="${safe}">
       <div class="erow-head">
         <span class="dot"></span><b class="ename">${f.name}</b>
-        <span class="muted">← ${f.parent}</span>
+        <span class="muted">← ${f.parent}</span>${badge}
       </div>
       <div class="erow-num muted sm">xyz ${fmt3(f.xyz)} · rpy ${fmt3(f.rpy)}</div>
       <div class="erow-btns">
-        <button class="mini" data-act="load">load</button>
-        <button class="mini mini-warn" data-act="remove">remove</button>
+        <button class="mini" data-act="load">load</button>${rm}
       </div></div>`;
   }).join("");
   host.querySelectorAll(".erow").forEach((row) => {
@@ -144,7 +169,8 @@ function renderList() {
     row.querySelector('[data-act="load"]').onclick = () => {
       loadForm(f); if (window.__viewerSelect) window.__viewerSelect(name);
     };
-    row.querySelector('[data-act="remove"]').onclick = () => onRemove(name);
+    const rmb = row.querySelector('[data-act="remove"]');
+    if (rmb) rmb.onclick = () => onRemove(name);
   });
 }
 
@@ -162,12 +188,13 @@ function fillParents(linkNames) {
 // ---- snapshot hook (called by viewer.js) --------------------------------
 window.__onSnapshot = (s) => {
   if (!s) return;
-  liveFrames = (s.aux_frames || []).map((f) => ({
+  const src = s.editable_frames || s.aux_frames || [];
+  liveFrames = src.map((f) => ({
     name: f.name, parent: f.parent,
     xyz: f.xyz || [0, 0, 0], rpy: f.rpy || [0, 0, 0],
+    source: f.source || "added",
   }));
-  // parent choices: base links only (aux frames can chain off any link, but
-  // base links are the common case; include aux links too for chaining)
+  // parent choices: every canonical link (a frame may hang off any link)
   links = s.links || [];
   fillParents(links);
   renderStatus(s);
@@ -177,9 +204,11 @@ window.__onSnapshot = (s) => {
     + (s.canonical_topic || "?") + "   ·   base " + (s.base_frame || "?");
 };
 
-// when a link is clicked in 3D: aux → load it for editing; base → set parent
-window.__onPickLink = (name, isAux, def) => {
-  if (isAux && def) { loadForm(def); }
+// when a link is clicked in 3D: an editable frame loads for editing; any other
+// link is offered as the parent for a new frame.
+window.__onPickLink = (name, isEditable, def) => {
+  const f = liveFrames.find((x) => x.name === name) || def;
+  if (isEditable && f) { loadForm(f); }
   else if (name) { const sel = $("f-parent"); if (sel) sel.value = name; }
 };
 

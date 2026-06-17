@@ -9,8 +9,10 @@ does not import the manager's internals):
     **base** URDF topic (the manufacturer URDF) — the difference of their link
     sets is exactly the set of AUX (added) frames;
   * subscribes the manager's ``~/status``;
-  * publishes the manager's ``~/set_aux_frames`` (JSON) to add / edit / remove
-    aux frames live (the test interface);
+  * publishes the manager's ``~/set_aux_frames`` (JSON) to replace the whole
+    added-frame list, and ``~/edit_frame`` (JSON) to edit ONE frame's offset —
+    including a frame already baked into the launch URDF, so EVERY fixed frame
+    is editable here, not only the ones the manager appended;
   * reads each link's world transform from **TF** (``base_frame -> link``) so
     the 3D canvas shows the robot at its live pose with no server-side FK
     (mirrors the cartesian_controller_dashboard approach; no Pinocchio).
@@ -158,6 +160,37 @@ def parse_aux_definitions(urdf_xml: str, aux_links: List[str]) -> List[dict]:
     return [defs[k] for k in aux_links if k in defs]
 
 
+def parse_fixed_frames(urdf_xml: str) -> List[dict]:
+    """Recover ``{name, parent, xyz, rpy}`` for EVERY link held by a fixed joint.
+
+    These are all the frames whose static offset can be edited -- the ones this
+    manager appended AND the ones already baked into the launch URDF. Links on a
+    movable joint are skipped (their pose comes from joint state)."""
+    out: List[dict] = []
+    try:
+        root = ET.fromstring(urdf_xml)
+    except Exception:
+        return out
+    for j in root.findall("joint"):
+        if j.get("type") != "fixed":
+            continue
+        c = j.find("child")
+        p = j.find("parent")
+        if c is None or p is None or not c.get("link") or not p.get("link"):
+            continue
+        origin = j.find("origin")
+        xyz = [0.0, 0.0, 0.0]
+        rpy = [0.0, 0.0, 0.0]
+        if origin is not None:
+            if origin.get("xyz"):
+                xyz = [float(x) for x in origin.get("xyz").split()]
+            if origin.get("rpy"):
+                rpy = [float(x) for x in origin.get("rpy").split()]
+        out.append({"name": c.get("link"), "parent": p.get("link"),
+                    "xyz": xyz, "rpy": rpy})
+    return out
+
+
 def _quat_to_R(x, y, z, w) -> List[List[float]]:
     n = (x * x + y * y + z * z + w * w) ** 0.5
     if n < 1e-12:
@@ -196,6 +229,8 @@ class AuxFrameDashboard(Node):
         self._visuals: List[dict] = []
         self._joint_tree: List[dict] = []
         self._aux_defs: List[dict] = []
+        # Every editable (fixed-joint) frame, each tagged source=added|base.
+        self._editable: List[dict] = []
         self._status: Optional[dict] = None
         self._status_aux: List[str] = []
         self._status_stamp = 0.0
@@ -212,6 +247,9 @@ class AuxFrameDashboard(Node):
         # publisher to drive the manager's live editor (the test interface)
         self._set_pub = self.create_publisher(
             String, f"{self._ns}/set_aux_frames", 10)
+        # publisher to edit a single frame's offset (added OR pre-existing)
+        self._edit_pub = self.create_publisher(
+            String, f"{self._ns}/edit_frame", 10)
 
         if _HAVE_TF:
             self._tf_buffer = tf2_ros.Buffer()
@@ -262,6 +300,12 @@ class AuxFrameDashboard(Node):
                 self._aux_links = [ln for ln in self._links if ln not in base]
             self._aux_defs = parse_aux_definitions(self._canon_urdf,
                                                    self._aux_links)
+            # Every fixed frame is editable; tag each by origin so the UI can
+            # show added vs pre-existing (baked into the launch URDF) frames.
+            added = set(self._aux_links)
+            self._editable = [
+                {**fr, "source": "added" if fr["name"] in added else "base"}
+                for fr in parse_fixed_frames(self._canon_urdf)]
 
     def _on_status(self, msg: String) -> None:
         try:
@@ -352,6 +396,7 @@ class AuxFrameDashboard(Node):
             visuals = list(self._visuals)
             joint_tree = list(self._joint_tree)
             aux_defs = list(self._aux_defs)
+            editable = list(self._editable)
             status = self._status
             age = (time.monotonic() - self._status_stamp
                    if self._status_stamp else None)
@@ -365,6 +410,7 @@ class AuxFrameDashboard(Node):
             "base_links": base_links,
             "aux_links": aux_links,
             "aux_frames": aux_defs,
+            "editable_frames": editable,
             "has_meshes": bool(visuals),
             "visuals": [
                 {"link": v["link"], "url": self._mesh_url(v["filename"]),
@@ -413,6 +459,36 @@ class AuxFrameDashboard(Node):
     def current_frames(self) -> list:
         with self._lock:
             return list(self._aux_defs)
+
+    def edit_frame(self, frame: dict) -> dict:
+        """Edit ONE frame's offset via the manager's ``~/edit_frame`` topic.
+
+        Works for a frame this manager added AND for a frame already present in
+        the launch URDF (a pre-existing fixed frame). ``parent`` is optional --
+        supply it only to create a new frame or re-parent an added one; it is
+        ignored when overriding a pre-existing frame's offset.
+        """
+        if not isinstance(frame, dict) or not frame.get("name"):
+            return {"ok": False, "message": "edit needs a 'name'"}
+        try:
+            payload = {
+                "name": str(frame["name"]),
+                "xyz": [float(v) for v in (frame.get("xyz") or [0, 0, 0])],
+                "rpy": [float(v) for v in (frame.get("rpy") or [0, 0, 0])],
+            }
+        except (TypeError, ValueError):
+            return {"ok": False, "message": "xyz/rpy must be 3 numbers each"}
+        if frame.get("parent"):
+            payload["parent"] = str(frame["parent"])
+        m = String()
+        m.data = json.dumps(payload)
+        for _ in range(3):
+            self._edit_pub.publish(m)
+            time.sleep(0.02)
+        return {"ok": True,
+                "message": "edited '%s' via %s/edit_frame"
+                           % (payload["name"], self._ns),
+                "frame": payload}
 
     # ------------------------------------------------------------------ #
     # HTTP server
@@ -481,6 +557,10 @@ class AuxFrameDashboard(Node):
                     b = self._read_json()
                     return self._send(200, json.dumps(
                         dash.set_aux_frames(b.get("frames", []))))
+                if path == "/api/edit_frame":
+                    b = self._read_json()
+                    return self._send(200, json.dumps(
+                        dash.edit_frame(b.get("frame", {}))))
                 return self._send(404, '{"error":"not found"}')
 
             def _serve_static(self, relpath):

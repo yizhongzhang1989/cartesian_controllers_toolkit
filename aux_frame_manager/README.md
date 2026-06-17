@@ -53,6 +53,7 @@ node exposes no services of its own (it *calls* `robot_state_publisher`'s
 |---|---|---|---|---|
 | sub | `base_urdf_topic` = `/robot_description` | `std_msgs/String` | latched¹ | manufacturer URDF in (the base to augment) |
 | **sub** | **`~/set_aux_frames`** | **`std_msgs/String`** (JSON) | depth 10 | **live control: replace the whole aux-frame list** |
+| **sub** | **`~/edit_frame`** | **`std_msgs/String`** (JSON) | depth 10 | **live: edit ONE frame's offset — added _or_ pre-existing** |
 | pub | `output_topic` = `/cartesian/robot_description` | `std_msgs/String` | latched¹ | the canonical augmented URDF out — controllers read this |
 | pub | `~/status` | `std_msgs/String` (JSON) | latched¹ | last action / current frames / health |
 
@@ -96,6 +97,37 @@ duplicate, chain reachable), then republishes `output_topic` and re-mirrors to
 RSP. An **invalid** list is rejected: the previous canonical URDF is kept and
 `~/status` reports the error.
 
+### `~/edit_frame` — edit any single frame (incl. baked-in ones)
+
+`~/set_aux_frames` only manages the frames this node *added*. But aux frames may
+already be **baked into the launch URDF** (e.g. a bringup that bakes
+`ft_sensor_link` / `compliance_link` into `/robot_description`). To make **every**
+fixed frame editable — not only the appended ones — publish a single frame on
+`~/edit_frame`:
+
+```bash
+# Nudge a frame's offset. Works whether the manager added it or it came baked
+# into the launch URDF — routed by name, only this frame is touched.
+ros2 topic pub --once /aux_frame_manager/edit_frame std_msgs/msg/String \
+  '{data: "{\"name\":\"ft_sensor_link\",\"xyz\":[0,0,0.05]}"}'
+```
+
+The message is `{"name": str, "xyz": [x,y,z], "rpy": [r,p,y], "parent"?: str}`.
+The manager routes by `name`:
+
+* **a frame it already added** → its `xyz`/`rpy` (and `parent`, if given) are
+  updated in the managed list and the URDF is re-augmented;
+* **a frame already present in the launch URDF** (any link held by a *fixed*
+  joint) → an **offset override** is recorded; the existing joint's `<origin>`
+  is rewritten in place on every build (no restructuring), so the edit persists
+  across base-URDF refreshes. `parent` is ignored (re-parenting a pre-existing
+  frame is out of scope);
+* **a new `name` with a `parent`** → added as a new managed frame.
+
+Links carried by a **movable** joint (revolute/prismatic/…) are *not* editable —
+their pose comes from joint state, not a fixed offset. Override edits are
+runtime-only (they do not persist to the next launch).
+
 > The dashboards are just clients of this topic. The aux_frame 3D dashboard
 > (`dashboard_port`) and the `cartesian_controller_dashboard` "Tool frames"
 > panel both publish here; the latter also writes the values back to
@@ -110,6 +142,7 @@ Latched `std_msgs/String` JSON, republished on every (re)build:
  "output_topic": "/cartesian/robot_description",
  "base_topic": "/robot_description",
  "aux_frames": ["ft_sensor_link", "compliance_link"],
+ "overrides": [],
  "have_canonical": true,
  "mirror_to_rsp": true}
 ```
@@ -117,6 +150,7 @@ Latched `std_msgs/String` JSON, republished on every (re)build:
 `message` starts with `ok:` on success or `error:` when a frame set was rejected
 (the canonical output is then unchanged). `aux_frames` is the list of frame
 names currently in the canonical URDF — read it to confirm an edit landed.
+`overrides` lists pre-existing frames whose offset was edited via `~/edit_frame`.
 
 ### Startup / static frame sources
 
@@ -172,11 +206,14 @@ Then configure the FZI controllers with:
   "robot_description is empty".
 * **`aux_frame_dashboard`** *(optional)* — a small web UI (Three.js 3D canvas)
   that draws the canonical robot and **highlights the added aux frames** (orange
-  marker + triad + label) versus the original links (grey meshes), plus a live
-  editor to add / edit / remove frames at runtime. It is a thin client of the
-  manager: it reads the canonical + base URDF topics and `~/status`, takes link
-  poses from **TF** (no extra FK dependency), and drives `~/set_aux_frames`. Off
-  by default; start it by passing `dashboard_port` to either launch file.
+  marker + triad + label) and **pre-existing fixed frames** baked into the launch
+  URDF (cyan), versus the original links (grey meshes), plus a live editor to add
+  / edit / remove frames at runtime. **Every** fixed frame is editable here, not
+  only the ones the manager added (pre-existing frames are edited offset-only via
+  `~/edit_frame`). It is a thin client of the manager: it reads the canonical +
+  base URDF topics and `~/status`, takes link poses from **TF** (no extra FK
+  dependency), and drives `~/set_aux_frames` + `~/edit_frame`. Off by default;
+  start it by passing `dashboard_port` to either launch file.
 
 ```bash
 # manager + dashboard on http://localhost:8160

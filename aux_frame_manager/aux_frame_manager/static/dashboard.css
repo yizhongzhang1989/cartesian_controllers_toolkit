@@ -55,6 +55,7 @@ html, body {
 .sw { width: 13px; height: 13px; border-radius: 3px; display: inline-block; }
 .sw-orig { background: #9fb4c4; }
 .sw-aux { background: var(--aux); }
+.sw-base { background: var(--accent); }
 .vf-opts { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; }
 .vf-opts label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
 .vf-counts { display: flex; gap: 14px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 7px; }
@@ -121,3 +122,12 @@ html, body {
 .ename { color: var(--aux); }
 .erow-num { font-family: ui-monospace, "Cascadia Code", monospace; }
 .erow-btns { display: flex; gap: 6px; }
+
+/* pre-existing (launch-URDF) frames: cyan accent instead of aux orange */
+.erow-base { border-left-color: var(--accent); }
+.erow-base .dot { background: var(--accent); }
+.erow-base .ename { color: var(--accent); }
+.badge { margin-left: auto; font-size: 10px; padding: 0 6px; line-height: 16px;
+  border-radius: 9px; border: 1px solid var(--line); color: var(--muted); }
+.badge-added { color: #ffe6bd; border-color: #5a4326; background: rgba(48, 33, 12, 0.5); }
+.badge-base { color: #bfe8ff; border-color: #234a5c; background: rgba(12, 33, 48, 0.5); }

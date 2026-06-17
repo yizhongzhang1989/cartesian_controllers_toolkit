@@ -25,7 +25,7 @@ from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
 import yaml
 
-from cct_common.urdf_loader import augment_urdf
+from cct_common.urdf_loader import augment_urdf, update_aux_frames
 
 
 def _as3(value: Optional[Sequence[float]]) -> List[float]:
@@ -283,6 +283,68 @@ def build_canonical_urdf(incoming_urdf: str,
     if not ok:
         raise ValueError(msg)
     return augment_urdf(base, norm), norm
+
+
+def list_fixed_frames(urdf_xml: str) -> List[Dict]:
+    """Return ``{name, parent, xyz, rpy}`` for every link held by a FIXED joint.
+
+    These are exactly the frames whose static offset can be edited -- whether
+    this manager appended them or they were already baked into the incoming
+    (launch-time) URDF. Links carried by a movable joint (revolute / prismatic /
+    continuous / floating / planar) are skipped: their pose comes from joint
+    state, not a fixed offset, so editing an origin would be meaningless.
+    """
+    try:
+        root = ET.fromstring(urdf_xml)
+    except ET.ParseError as exc:
+        raise ValueError(f"could not parse URDF: {exc}") from exc
+    if root.tag != "robot":
+        raise ValueError(f"expected <robot> root, got <{root.tag}>")
+    out: List[Dict] = []
+    for joint in root.findall("joint"):
+        if joint.get("type") != "fixed":
+            continue
+        c = joint.find("child")
+        p = joint.find("parent")
+        if c is None or p is None or not c.get("link") or not p.get("link"):
+            continue
+        origin = joint.find("origin")
+        xyz = [0.0, 0.0, 0.0]
+        rpy = [0.0, 0.0, 0.0]
+        if origin is not None:
+            if origin.get("xyz"):
+                xyz = [float(v) for v in origin.get("xyz").split()]
+            if origin.get("rpy"):
+                rpy = [float(v) for v in origin.get("rpy").split()]
+        out.append({"name": c.get("link"), "parent": p.get("link"),
+                    "xyz": xyz, "rpy": rpy})
+    return out
+
+
+def apply_overrides(urdf_xml: str,
+                    overrides: Mapping[str, Mapping]
+                    ) -> Tuple[str, List[str], List[str]]:
+    """Rewrite the ``<origin>`` of existing FIXED-joint frames in place.
+
+    ``overrides`` maps a frame (child-link) name to ``{xyz, rpy}``. This edits
+    the offset of frames ALREADY present in ``urdf_xml`` (e.g. aux frames baked
+    into the launch URDF) WITHOUT adding or restructuring anything -- unlike
+    :func:`build_canonical_urdf`, which augments brand-new frames. It is the
+    counterpart used by the manager so that *every* fixed frame is editable, not
+    only the ones it appended.
+
+    Returns ``(urdf, updated_names, missing_names)``. A name with no matching
+    fixed joint is reported in ``missing`` and left untouched (idempotent, so
+    re-applying the same overrides on the manager's own echo is a no-op).
+    """
+    if not overrides:
+        return urdf_xml, [], []
+    entries = [{"name": str(name),
+                "xyz": _as3(spec.get("xyz") if isinstance(spec, Mapping) else None),
+                "rpy": _as3(spec.get("rpy") if isinstance(spec, Mapping) else None)}
+               for name, spec in overrides.items()]
+    res = update_aux_frames(urdf_xml, entries)
+    return res.urdf_xml, list(res.updated), list(res.missing)
 
 
 def extract_chain_links(urdf_xml: str, base: str, ee: str) -> List[str]:

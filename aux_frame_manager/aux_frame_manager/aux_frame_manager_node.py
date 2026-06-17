@@ -13,8 +13,12 @@ This node never commands the robot. It is the sole writer of the canonical
 topic; running a second writer would defeat the consistency guarantee.
 
 Live edits: publish a JSON frame list on ``~/set_aux_frames`` (std_msgs/String)
-to change offsets or add/remove frames; the canonical URDF is rebuilt and
-re-published (and re-pushed to RSP). Status is published on ``~/status``.
+to replace the whole managed aux-frame list (offsets, add/remove). To edit just
+ONE frame's offset -- including a frame already baked into the launch URDF --
+publish ``{name, xyz, rpy}`` on ``~/edit_frame``; pre-existing fixed frames are
+rewritten in place (offset override) so *every* fixed frame is editable, not
+only the ones this node appended. The canonical URDF is rebuilt and re-published
+(and re-pushed to RSP). Status is published on ``~/status``.
 """
 
 from __future__ import annotations
@@ -32,9 +36,20 @@ from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
 from rcl_interfaces.srv import SetParameters
 from std_msgs.msg import String
 
-from aux_frame_manager.frame_source import (build_canonical_urdf, merge_frames,
+from aux_frame_manager.frame_source import (apply_overrides, build_canonical_urdf,
+                                            list_fixed_frames, merge_frames,
                                             parse_inline_frames, parse_spec_string,
                                             strip_aux_frames)
+
+
+def _vec3(value) -> List[float]:
+    """Coerce an optional 3-sequence to ``[x, y, z]`` floats (default zeros)."""
+    if value is None:
+        return [0.0, 0.0, 0.0]
+    out = [float(v) for v in value]
+    if len(out) != 3:
+        raise ValueError(f"expected 3 numbers, got {value!r}")
+    return out
 
 
 def latched_qos() -> QoSProfile:
@@ -70,6 +85,14 @@ class AuxFrameManager(Node):
         self._rsp_name = str(self.get_parameter("robot_state_publisher_name").value)
 
         self._frames: List[Dict] = self._load_frames()
+        # Offset overrides for frames that ALREADY exist in the incoming URDF
+        # (e.g. aux frames baked into the launch URDF, or any manufacturer fixed
+        # frame): name -> {xyz, rpy}. These are NOT stripped/re-augmented like
+        # self._frames; their existing fixed joint's <origin> is rewritten in
+        # place on every build, so any fixed frame is editable -- not only the
+        # ones this manager appended. Re-applied each rebuild, so they persist
+        # across base-URDF refreshes (an RSP echo or a bringup re-publish).
+        self._overrides: Dict[str, Dict] = {}
         # The latest manufacturer base URDF, with every managed aux frame
         # stripped off (recovered from each incoming /robot_description). Live
         # edits rebuild from THIS, so a remove/rename can't strand a stale frame.
@@ -86,6 +109,8 @@ class AuxFrameManager(Node):
         self.create_subscription(String, self._base_topic, self._on_base_urdf,
                                  latched_qos())
         self.create_subscription(String, "~/set_aux_frames", self._on_set_frames, 10)
+        # Edit a SINGLE frame's offset (added OR pre-existing) by name.
+        self.create_subscription(String, "~/edit_frame", self._on_edit_frame, 10)
 
         self._cli_rsp: Optional[rclpy.client.Client] = None
         if self._push_rsp:
@@ -176,6 +201,15 @@ class AuxFrameManager(Node):
         # (a child may arrive before its parent; build_canonical_urdf sorts it).
         self._frames = norm
         self._managed_names |= {f["name"] for f in norm}
+        # Rewrite the offsets of any pre-existing fixed frames the operator has
+        # edited (frames baked into the launch URDF that we do NOT augment). Done
+        # after augmenting so every fixed frame -- added or pre-existing -- ends
+        # up editable. Re-applied each build, so it survives base refreshes.
+        if self._overrides:
+            canonical, _updated, missing = apply_overrides(canonical, self._overrides)
+            if missing:
+                self.get_logger().debug(
+                    "override targets not present in URDF yet (skipped): %s" % missing)
         if canonical == self._canonical:
             return  # no change (incl. RSP echo of our own output) -> loop-safe
         self._canonical = canonical
@@ -240,12 +274,81 @@ class AuxFrameManager(Node):
         # so removing/renaming a frame correctly drops the old one.
         self._rebuild_and_publish()
 
+    def _on_edit_frame(self, msg: String) -> None:
+        """Edit ONE frame's offset by name -- works for a frame this manager
+        added AND for a frame already present in the launch URDF.
+
+        JSON ``{name, xyz, rpy, parent?}``. Routing by ``name``:
+          1. a frame we already augment -> update its xyz/rpy (and parent if
+             given) in the managed list and rebuild;
+          2. a pre-existing fixed frame in the base URDF -> record an offset
+             override (its existing joint <origin> is rewritten each build);
+          3. otherwise, if a ``parent`` is given -> add it as a new managed frame.
+
+        Unlike ``~/set_aux_frames`` (which REPLACES the whole managed list), this
+        touches only the named frame, so editing a baked-in frame never disturbs
+        the others.
+        """
+        try:
+            d = json.loads(msg.data)
+            if not isinstance(d, dict):
+                raise ValueError("edit_frame expects a JSON object")
+            name = str(d.get("name") or "").strip()
+            if not name:
+                raise ValueError("edit_frame needs a non-empty 'name'")
+            xyz = _vec3(d.get("xyz"))
+            rpy = _vec3(d.get("rpy"))
+            parent = str(d.get("parent") or "").strip()
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().error("edit_frame ignored: %r" % exc)
+            self._publish_status("error: bad edit_frame (%r)" % exc)
+            return
+
+        # (1) a frame this manager augments -> edit it in place.
+        for f in self._frames:
+            if f["name"] == name:
+                f["xyz"], f["rpy"] = xyz, rpy
+                if parent:
+                    f["parent"] = parent
+                self._overrides.pop(name, None)
+                self.get_logger().info("edit_frame: updated managed frame '%s'" % name)
+                self._rebuild_and_publish()
+                return
+
+        # (2) a frame already in the launch URDF -> override its fixed-joint
+        # origin in place (any pre-existing fixed frame is editable this way).
+        base_fixed = ({f["name"] for f in list_fixed_frames(self._base_urdf)}
+                      if self._base_urdf else set())
+        if name in base_fixed:
+            self._overrides[name] = {"xyz": xyz, "rpy": rpy}
+            self.get_logger().info(
+                "edit_frame: override pre-existing frame '%s' xyz=%s rpy=%s"
+                % (name, xyz, rpy))
+            self._rebuild_and_publish()
+            return
+
+        # (3) a brand-new frame needs a parent to hang off.
+        if parent:
+            self._frames.append(
+                {"name": name, "parent": parent, "xyz": xyz, "rpy": rpy})
+            self._managed_names.add(name)
+            self.get_logger().info("edit_frame: added new frame '%s' on '%s'"
+                                   % (name, parent))
+            self._rebuild_and_publish()
+            return
+
+        why = ("edit_frame: '%s' is neither a managed frame nor a fixed frame in "
+               "the base URDF, and no 'parent' was given to create it" % name)
+        self.get_logger().error(why)
+        self._publish_status("error: %s" % why)
+
     def _publish_status(self, message: str) -> None:
         payload = {
             "message": message,
             "output_topic": self._out_topic,
             "base_topic": self._base_topic,
             "aux_frames": [f["name"] for f in self._frames],
+            "overrides": sorted(self._overrides.keys()),
             "have_canonical": bool(self._canonical),
             "mirror_to_rsp": self._push_rsp,
         }
