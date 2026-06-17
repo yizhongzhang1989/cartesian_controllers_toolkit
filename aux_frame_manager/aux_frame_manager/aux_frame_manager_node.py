@@ -72,7 +72,6 @@ class AuxFrameManager(Node):
         self.declare_parameter("robot_state_publisher_name", "robot_state_publisher")
         # Frame sources (Req 1): a config-file section + an inline override.
         self.declare_parameter("config_file", "")          # "" -> auto-resolve
-        self.declare_parameter("aux_frames_section", "")   # "" -> from config
         # Direct-argument frames (Req 1): rcl-safe compact specs
         # 'name:parent[:x,y,z[:r,p,yw]]' separated by ';'. A bracketed YAML/JSON
         # string does NOT survive the rcl param parser, so this compact form is
@@ -131,19 +130,14 @@ class AuxFrameManager(Node):
     # ------------------------------------------------------------------ #
     def _load_frames(self) -> List[Dict]:
         file_frames: List[Dict] = []
-        section = str(self.get_parameter("aux_frames_section").value or "")
         cfg_path = str(self.get_parameter("config_file").value or "")
         try:
             from cct_common.config_manager import get_config, read_aux_frames
-            if not section:
-                cfg = get_config()
-                section = str(cfg.get("cartesian_control_manager.aux_frames_section",
-                                      cfg.get("aux_frames_section", "")) or "")
             if not cfg_path:
                 cfg = get_config()
                 cfg_path = str(getattr(cfg, "config_path", "") or "")
-            if cfg_path and section:
-                file_frames = read_aux_frames(cfg_path, section)
+            if cfg_path:
+                file_frames = read_aux_frames(cfg_path, "aux_frame_manager")
         except Exception as exc:  # noqa: BLE001
             self.get_logger().warn("could not read aux_frames from config: %r" % exc)
 
@@ -161,8 +155,8 @@ class AuxFrameManager(Node):
             merged = []
         if not merged:
             self.get_logger().warn(
-                "no aux frames configured (section=%r, file=%r, inline=%r) -- "
-                "canonical URDF will equal the base." % (section, cfg_path, inline))
+                "no aux frames configured (file=%r, inline=%r) -- "
+                "canonical URDF will equal the base." % (cfg_path, inline))
         return merged
 
     # ------------------------------------------------------------------ #

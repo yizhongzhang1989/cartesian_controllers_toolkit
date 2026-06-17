@@ -630,13 +630,6 @@ class DashboardNode(Node):
         ("base_frame", "base_link"),
         ("tool_frame", "tool0"),
         ("service_timeout_sec", 2.0),
-        # Top-level YAML key in ``robot_config.yaml`` whose
-        # ``aux_frames`` list the dashboard's "Tool frames" panel
-        # reads / writes.  Empty string disables the panel (the
-        # API returns a clear error).  Per-robot workspaces should
-        # set this to their bringup package name (e.g.
-        # ``my_robot_bringup``).
-        ("aux_frames_section", ""),
         # Namespace of the aux_frame_manager node that owns the canonical
         # augmented robot_description (single-writer architecture).  When a
         # manager is subscribed to ``<ns>/set_aux_frames`` the "Tool frames"
@@ -678,7 +671,10 @@ class DashboardNode(Node):
         self._base_frame = str(gp("base_frame")).strip("/")
         self._tool_frame = str(gp("tool_frame")).strip("/")
         self._service_timeout = float(gp("service_timeout_sec"))
-        self._aux_frames_section = str(gp("aux_frames_section")).strip()
+        # Auxiliary frames live under the standard ``aux_frame_manager:``
+        # section of robot_config.yaml (the manager node reads its own
+        # section); the "Tool frames" editor reads / writes that same list.
+        self._aux_frames_section = "aux_frame_manager"
         self._aux_frame_manager_ns = str(gp("aux_frame_manager_ns")).rstrip("/")
         self._host = str(gp("host"))
         self._port = int(gp("port"))
@@ -2127,8 +2123,8 @@ class DashboardNode(Node):
     # ``config/robot_config.yaml`` via the line-targeted
     # ``cct_common.config_manager.save_aux_frames`` helper which preserves
     # comments and unrelated keys; they take effect on the next robot
-    # bringup.  The top-level YAML key that owns the list is set by
-    # the ``aux_frames_section`` parameter (per-robot configuration).
+    # bringup.  The top-level YAML key that owns the list is the standard
+    # ``aux_frame_manager:`` section (the manager node reads its own section).
     #
     # Adding, renaming, or removing aux_frames is intentionally NOT
     # exposed -- those edits ripple into the per-robot ``fzi_preset.yaml``
@@ -2140,12 +2136,6 @@ class DashboardNode(Node):
             raise RuntimeError(
                 "cct_common.config_manager not importable: "
                 f"{_COMMON_IMPORT_ERROR}")
-        if not self._aux_frames_section:
-            raise RuntimeError(
-                "aux_frames panel disabled: "
-                "set the 'aux_frames_section' parameter to the "
-                "top-level robot_config.yaml key that owns the "
-                "aux_frames list (e.g. the bringup package name)")
         cfg = _get_config()
         config_path = cfg.config_path
         if not config_path:
@@ -2180,12 +2170,6 @@ class DashboardNode(Node):
             raise RuntimeError(
                 "cct_common.config_manager not importable: "
                 f"{_COMMON_IMPORT_ERROR}")
-        if not self._aux_frames_section:
-            raise RuntimeError(
-                "aux_frames panel disabled: "
-                "set the 'aux_frames_section' parameter to the "
-                "top-level robot_config.yaml key that owns the "
-                "aux_frames list (e.g. the bringup package name)")
         if not isinstance(body, dict):
             raise RuntimeError("body must be a JSON object")
         frames_in = body.get("frames")

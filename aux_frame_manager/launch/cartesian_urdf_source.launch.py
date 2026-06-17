@@ -32,8 +32,6 @@ _FALLBACKS = {
     "update_robot_state_publisher": "true",
     "robot_state_publisher_name": "robot_state_publisher",
     "config_file": "",
-    "aux_frames_section": "",
-    "aux_frames": "",
     "robot_base_link": "base_link",
     "end_effector_link": "",
     "required_frames": "['']",
@@ -83,13 +81,10 @@ def generate_launch_description() -> LaunchDescription:
                               default_value=str(d["robot_state_publisher_name"])),
         DeclareLaunchArgument("config_file",
                               default_value=str(d["config_file"])),
-        DeclareLaunchArgument("aux_frames_section",
-                              default_value=str(d["aux_frames_section"])),
-        # Direct-argument frames: rcl-safe compact specs
-        # 'name:parent[:x,y,z[:r,p,yw]]' separated by ';'. Overrides/extends the
-        # config-file frames. Empty -> use only the config file.
-        DeclareLaunchArgument("aux_frames",
-                              default_value=str(d["aux_frames"])),
+        # Inline frames for quick CLI tests: rcl-safe compact specs
+        # 'name:parent[:x,y,z[:r,p,yw]]' separated by ';'. CLI-only convenience
+        # (NOT config-sourced); merged on top of the config aux_frames list.
+        DeclareLaunchArgument("aux_frames", default_value=""),
         # Guard: the FZI endpoint + reference frames to verify are in-chain.
         DeclareLaunchArgument("robot_base_link",
                               default_value=str(d["robot_base_link"])),
@@ -111,7 +106,6 @@ def generate_launch_description() -> LaunchDescription:
     log = LogInfo(msg=(
         f"[aux_frame_manager] config: {source}; "
         f"base='{d['base_urdf_topic']}' -> canonical='{d['output_topic']}'; "
-        f"aux_frames_section='{d['aux_frames_section']}' "
         f"end_effector_link='{d['end_effector_link']}'"))
 
     manager = Node(
@@ -127,7 +121,6 @@ def generate_launch_description() -> LaunchDescription:
             "robot_state_publisher_name":
                 LaunchConfiguration("robot_state_publisher_name"),
             "config_file": LaunchConfiguration("config_file"),
-            "aux_frames_section": LaunchConfiguration("aux_frames_section"),
             "aux_frames": LaunchConfiguration("aux_frames"),
         }],
     )

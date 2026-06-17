@@ -31,8 +31,6 @@ _FALLBACKS = {
     "update_robot_state_publisher": "true",
     "robot_state_publisher_name": "robot_state_publisher",
     "config_file": "",
-    "aux_frames_section": "",
-    "aux_frames": "",
     "dashboard_port": "",
     "base_frame": "base_link",
 }
@@ -79,10 +77,9 @@ def generate_launch_description() -> LaunchDescription:
                               default_value=str(d["robot_state_publisher_name"])),
         DeclareLaunchArgument("config_file",
                               default_value=str(d["config_file"])),
-        DeclareLaunchArgument("aux_frames_section",
-                              default_value=str(d["aux_frames_section"])),
-        DeclareLaunchArgument("aux_frames",
-                              default_value=str(d["aux_frames"])),
+        # Inline frames for quick CLI tests (NOT config-sourced); merged on top
+        # of the config aux_frames list.
+        DeclareLaunchArgument("aux_frames", default_value=""),
         DeclareLaunchArgument(
             "dashboard_port", default_value=str(d["dashboard_port"]),
             description="If set, also start the web dashboard on this port."),
@@ -94,7 +91,7 @@ def generate_launch_description() -> LaunchDescription:
     log = LogInfo(msg=(
         f"[aux_frame_manager] config: {source}; "
         f"base='{d['base_urdf_topic']}' -> canonical='{d['output_topic']}'; "
-        f"aux_frames_section='{d['aux_frames_section']}'"))
+        f"base_frame='{d['base_frame']}'"))
 
     node = Node(
         package="aux_frame_manager",
@@ -109,7 +106,6 @@ def generate_launch_description() -> LaunchDescription:
             "robot_state_publisher_name":
                 LaunchConfiguration("robot_state_publisher_name"),
             "config_file": LaunchConfiguration("config_file"),
-            "aux_frames_section": LaunchConfiguration("aux_frames_section"),
             "aux_frames": LaunchConfiguration("aux_frames"),
         }],
     )

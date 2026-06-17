@@ -34,10 +34,11 @@ _FALLBACKS = {
     # sets ``tool_frame: compliance_link`` (a frame added at bringup).
     "base_frame":          "base_link",
     "tool_frame":          "tool0",
-    "aux_frames_section":  "",
     # Namespace of the aux_frame_manager (single-writer of the canonical
-    # URDF).  When present, "Tool frames" saves route through its
-    # <ns>/set_aux_frames so topic-mode FZI controllers swap chain live.
+    # URDF).  The "Tool frames" editor reads / writes the frame list under
+    # the standard ``aux_frame_manager:`` config section and routes live
+    # saves through its <ns>/set_aux_frames so topic-mode FZI controllers
+    # swap chain live.
     "aux_frame_manager_ns": "/aux_frame_manager",
     "service_timeout_sec": 2.0,
     "host":                "0.0.0.0",

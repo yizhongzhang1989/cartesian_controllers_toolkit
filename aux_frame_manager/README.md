@@ -156,9 +156,9 @@ names currently in the canonical URDF — read it to confirm an edit landed.
 
 For frames known at launch time (instead of, or in addition to, live edits):
 
-* **config file** — `aux_frames_section` names a top-level key in
-  `config/robot_config.yaml` whose `aux_frames:` list (each
-  `{name, parent, xyz, rpy}`) is read via `cct_common`;
+* **config file (default)** — the node reads the `aux_frames:` list (each
+  `{name, parent, xyz, rpy}`) from its **own** `aux_frame_manager:` section of
+  `config/robot_config.yaml` via `cct_common`;
 * **direct argument** — `aux_frames` is an **rcl-safe compact** string of
   `name:parent[:x,y,z[:r,p,yw]]` specs separated by `;` (a bracketed YAML/JSON
   string does *not* survive the rcl parameter parser). It overrides/extends the
@@ -232,7 +232,6 @@ runtime control surface.
 | `output_topic` | `/cartesian/robot_description` | canonical URDF out (latched) |
 | `update_robot_state_publisher` | `true` | mirror canonical URDF to RSP (one TF truth) |
 | `robot_state_publisher_name` | `robot_state_publisher` | RSP node whose `robot_description` is mirrored |
-| `aux_frames_section` | `""` | config-file section holding the `aux_frames` list |
 | `config_file` | `""` (auto) | path to the config YAML (`""` → `cct_common` auto-resolve) |
 | `aux_frames` | `""` | compact `name:parent[:x,y,z[:r,p,yw]]` specs, `;`-separated |
 
