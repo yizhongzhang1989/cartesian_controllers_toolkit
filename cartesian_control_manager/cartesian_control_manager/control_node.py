@@ -645,11 +645,16 @@ class CartesianControlNode(Node):
     def _engage_locked(self, why: str) -> Tuple[bool, str]:
         """Switch JTC -> FZI atomically; caller must hold ``self._lock``.
 
-        Preconditions: at least one wrench + one joint_states must have
-        arrived, and (if ``engage_max_joint_velocity`` > 0) the arm
-        must be effectively stationary.
+        Preconditions: one joint_states must have arrived; for controllers
+        that consume the wrench (``force`` / ``compliance``) one wrench must
+        also have arrived; and (if ``engage_max_joint_velocity`` > 0) the arm
+        must be effectively stationary.  A pure ``motion`` controller tracks
+        ``target_frame`` and ignores the FT sensor, so it does NOT require a
+        wrench to engage.
         """
-        if self._last_wrench is None:
+        active_kind = self._kind_by_name.get(self._active_controller_name, "")
+        needs_wrench = active_kind != "motion"
+        if needs_wrench and self._last_wrench is None:
             return False, "no wrench received yet"
         if self._last_q_mono is None:
             return False, "no joint_states received yet"
@@ -863,35 +868,53 @@ class CartesianControlNode(Node):
     # safety supervisor
     # ------------------------------------------------------------------
     def _on_supervisor_tick(self) -> None:
-        """Stale-data + force-limit checks; auto-disengages on any trip."""
+        """Stale-data + force-limit checks; auto-disengages on any trip.
+
+        The joint_states-staleness check applies to every engaged controller
+        (all of them stream joint position commands).  The wrench-related
+        checks (FT staleness + force/torque limits) apply only to controllers
+        that actually consume the wrench -- ``force`` and ``compliance``.  A
+        pure ``motion`` controller tracks ``target_frame`` and ignores the FT
+        sensor, so it must NOT be disengaged when the FT topic is absent or
+        stale.
+        """
         with self._lock:
             if not self._engaged:
                 return
-            if self._last_wrench is None or self._last_wrench_mono is None:
+            if self._last_q_mono is None:
                 return
+            uses_wrench = (
+                self._kind_by_name.get(self._engaged_controller_name, "")
+                != "motion")
             now = time.monotonic()
-            ft_age = now - self._last_wrench_mono
-            q_age = now - (self._last_q_mono or 0.0)
-            wrench = self._last_wrench.copy()
-            ft_stale = self._ft_stale_after
+            q_age = now - self._last_q_mono
             q_stale = self._joint_states_stale_after
+            ft_age = None
+            wrench = None
+            if uses_wrench:
+                if self._last_wrench is None or self._last_wrench_mono is None:
+                    return
+                ft_age = now - self._last_wrench_mono
+                wrench = self._last_wrench.copy()
+            ft_stale = self._ft_stale_after
             f_lim = self._max_wrench_force
             t_lim = self._max_wrench_torque
 
-        if ft_age > ft_stale:
-            self._trip(f"FT topic stale ({ft_age:.2f} s)")
-            return
         if q_age > q_stale:
             self._trip(f"joint_states stale ({q_age:.2f} s)")
             return
-        f_mag = float(np.linalg.norm(wrench[:3]))
-        t_mag = float(np.linalg.norm(wrench[3:]))
-        if f_mag > f_lim:
-            self._trip(f"force {f_mag:.1f} N exceeds limit {f_lim} N")
-            return
-        if t_mag > t_lim:
-            self._trip(f"torque {t_mag:.2f} Nm exceeds limit {t_lim} Nm")
-            return
+        if uses_wrench:
+            if ft_age > ft_stale:
+                self._trip(f"FT topic stale ({ft_age:.2f} s)")
+                return
+            f_mag = float(np.linalg.norm(wrench[:3]))
+            t_mag = float(np.linalg.norm(wrench[3:]))
+            if f_mag > f_lim:
+                self._trip(f"force {f_mag:.1f} N exceeds limit {f_lim} N")
+                return
+            if t_mag > t_lim:
+                self._trip(f"torque {t_mag:.2f} Nm exceeds limit {t_lim} Nm")
+                return
 
     def _trip(self, reason: str) -> None:
         """Disengage due to a safety violation.
