@@ -166,18 +166,11 @@ For frames known at launch time (instead of, or in addition to, live edits):
 
 A live `~/set_aux_frames` message supersedes both for the rest of the session.
 
-### Guard output (`aux_frame_guard`)
-
-| dir | topic | type | purpose |
-|---|---|---|---|
-| pub | `<output_topic>_ready` = `/cartesian/robot_description_ready` | `std_msgs/Bool` | latched `true` once the endpoint/reference frames are present **and** in the `base->ee` chain |
-
 ## Run
 
 ```bash
 # after the basic bringup is up (publishes /robot_description):
 ros2 launch aux_frame_manager cartesian_urdf_source.launch.py \
-    end_effector_link:=compliance_link \
     aux_frames:='ft_sensor_link:link_6; compliance_link:ft_sensor_link'
 # manager alone:
 ros2 launch aux_frame_manager aux_frame_manager.launch.py
@@ -199,11 +192,6 @@ Then configure the FZI controllers with:
 
 * **`aux_frame_manager`** — builds and publishes the canonical URDF; mirrors it
   to `robot_state_publisher` (`update_robot_state_publisher:=true`). Sole writer.
-* **`aux_frame_guard`** — verifies the configured endpoint/reference frames are
-  present **and in-chain** (`base->ee`, exactly FZI's `getChain` +
-  `robotChainContains` constraint), latches `<topic>_ready` (Bool), and prints
-  an actionable error naming missing frames if not — instead of FZI's cryptic
-  "robot_description is empty".
 * **`aux_frame_dashboard`** *(optional)* — a small web UI (Three.js 3D canvas)
   that draws the canonical robot and **highlights the added aux frames** (orange
   marker + triad + label) and **pre-existing fixed frames** baked into the launch
@@ -234,10 +222,6 @@ runtime control surface.
 | `robot_state_publisher_name` | `robot_state_publisher` | RSP node whose `robot_description` is mirrored |
 | `config_file` | `""` (auto) | path to the config YAML (`""` → `cct_common` auto-resolve) |
 | `aux_frames` | `""` | compact `name:parent[:x,y,z[:r,p,yw]]` specs, `;`-separated |
-
-`aux_frame_guard` parameters: `robot_description_topic`
-(`/cartesian/robot_description`), `robot_base_link` (`base_link`),
-`end_effector_link` (`""`), `required_frames` (`['']`).
 
 ## Loop safety
 

@@ -41,7 +41,6 @@ setup(
     entry_points={
         'console_scripts': [
             'aux_frame_manager = aux_frame_manager.aux_frame_manager_node:main',
-            'aux_frame_guard = aux_frame_manager.aux_frame_guard:main',
             'aux_frame_dashboard = aux_frame_manager.dashboard_node:main',
         ],
     },

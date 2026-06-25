@@ -12,10 +12,13 @@ URDF, joints, sensor topics, and the FZI YAML preset.
 | package | purpose | runtime port |
 |---|---|---|
 | `cct_common` | centralised config loader (`config/robot_config.yaml`) and shared XML / URDF helpers. Named `cct_common` so the toolkit drops into any workspace as a submodule without colliding with a host `common` package | -- |
+| `aux_frame_manager` | single-writer owner of the **canonical augmented `robot_description`**: appends auxiliary fixed frames (FT-sensor / compliance / operation-origin links) to the manufacturer URDF and serves it on a latched topic as the FZI controllers' single URDF source (optionally mirrored to `robot_state_publisher` so `/tf` carries them); ships an optional 3D web dashboard with a live frame editor | `8160` |
 | `cartesian_control_manager` | spawns FZI's `cartesian_force_controller` / `cartesian_motion_controller` / `cartesian_compliance_controller` (all inactive), relays the wrench, optionally publishes a `target_wrench` heartbeat (off by default — see `publish_target_wrench`), exposes engage / disengage `Trigger` services and runs a safety supervisor | -- |
 | `cartesian_controller_dashboard` | optional web UI (stdlib `http.server`): engage / disengage, controller selection, live gain tuning, optional tool-frame editing | `8120` |
 | `ft_sensor_gravity_compensation` | subscribes to a raw wrench topic + `/tf`, publishes a gravity-compensated wrench, ships its own calibration UI | `8100` |
 | `ft_sensor_dashboard` | sensor-agnostic web UI for any `geometry_msgs/WrenchStamped` topic | `8080` |
+| `robot_feasibility_test` | headless engine (+ optional web dashboard) that drives a forward-position controller through admittance-style command profiles (smooth / staircase / step / resonance / sweep) and scores a robot's **force-control readiness** — tracking quality, latency, vibration, structural resonance (`f_n` / `ζ`) — saving a self-contained report per run | `8140` |
+| `robot_control_test` | interactive web bench with a **3D canvas** to verify a robot works with each of its ros2_control controllers: discovers the controllers on the `controller_manager`, activates one, and sends safe speed-limited test commands — joint-trajectory / forward-position joint jogs, and FZI cartesian motion / compliance / force targets | `8200` |
 
 ## How to use
 
@@ -29,7 +32,7 @@ cd <your_workspace>
 git submodule add https://github.com/yizhongzhang1989/cartesian_controllers_toolkit.git external/cartesian_controllers_toolkit
 git submodule update --init --recursive
 
-# colcon will pick up all 5 packages automatically
+# colcon will pick up all 8 packages automatically
 colcon build --symlink-install
 ```
 

@@ -162,7 +162,21 @@ aux_frame_manager:
   # aux_frame_manager as `base_frame` (both default to base_link).
   robot_base_link: "base_link"
   base_frame: "base_link"
-  enable_guard: "true"      # cartesian_urdf_source.launch.py pre-activate guard
-  end_effector_link: ""     # FZI endpoint to verify in-chain ("" = skip)
-  required_frames: "['']"   # extra frames to verify ("['']" = none; NOT [] which rcl rejects)
   dashboard_port: ""        # optional web dashboard: "" = off, else a port (e.g. 8160)
+
+# -----------------------------------------------------------------------------
+# robot_control_test -- interactive web bench (3D canvas) to verify a robot
+# works with each of its ros2_control controllers. Discovers the controllers on
+# the controller_manager, activates one, and sends safe speed-limited test
+# commands: joint-trajectory / forward-position joint jogs, and the FZI
+# cartesian motion / compliance / force targets. Robot-neutral.
+# -----------------------------------------------------------------------------
+robot_control_test:
+  dashboard_port: 8200                            # web UI port
+  controller_manager: "/controller_manager"       # discover / switch controllers
+  robot_description_topic: "/robot_description"    # URDF source for the 3D model
+  joint_states_topic: "/joint_states"              # live joint feedback
+  base_frame: "base_link"        # TF frame the 3D view / Cartesian targets use
+  tip_frame: ""                  # TCP frame ("" -> the URDF's last leaf link)
+  max_joint_speed: 0.5           # rad/s cap for JTC moves + forward-position ramps
+  send_rate: 100.0               # Hz forward-position command stream rate

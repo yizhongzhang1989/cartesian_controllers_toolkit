@@ -1,4 +1,4 @@
-"""Launch the canonical-URDF source: aux_frame_manager + pre-activate guard.
+"""Launch the canonical-URDF source: aux_frame_manager (+ optional dashboard).
 
 This is the building block that makes the FZI Cartesian controllers read their
 URDF from a single latched topic. Run it AFTER the basic robot bringup (which
@@ -7,12 +7,10 @@ the Cartesian controllers (which must be configured with
 ``urdf_from_topic:=true`` and ``robot_description_topic:=/cartesian/robot_description``).
 
     ros2 launch aux_frame_manager cartesian_urdf_source.launch.py \
-        end_effector_link:=compliance_link \
         aux_frames:='ft_sensor_link:link_6; compliance_link:ft_sensor_link'
 
-The guard latches ``/cartesian/robot_description_ready`` (Bool) once the
-configured endpoint/reference frames are present and in-chain; it prints an
-actionable error otherwise.
+The FZI controllers validate their own ``robot_base_link`` -> ``end_effector_link``
+chain at on_configure, so no separate pre-activation check runs here.
 """
 
 from launch import LaunchDescription
@@ -33,9 +31,6 @@ _FALLBACKS = {
     "robot_state_publisher_name": "robot_state_publisher",
     "config_file": "",
     "robot_base_link": "base_link",
-    "end_effector_link": "",
-    "required_frames": "['']",
-    "enable_guard": "true",
     "dashboard_port": "",
 }
 
@@ -85,19 +80,9 @@ def generate_launch_description() -> LaunchDescription:
         # 'name:parent[:x,y,z[:r,p,yw]]' separated by ';'. CLI-only convenience
         # (NOT config-sourced); merged on top of the config aux_frames list.
         DeclareLaunchArgument("aux_frames", default_value=""),
-        # Guard: the FZI endpoint + reference frames to verify are in-chain.
+        # base_frame for the optional dashboard's TF lookups.
         DeclareLaunchArgument("robot_base_link",
                               default_value=str(d["robot_base_link"])),
-        DeclareLaunchArgument("end_effector_link",
-                              default_value=str(d["end_effector_link"])),
-        # NOTE: default is ['']  (one empty string), NOT []  -- an empty list
-        # is rejected by the ROS 2 parameter parser ("Expected a non-empty
-        # sequence"). The guard filters out the empty entry, so [''] behaves
-        # like "no required frames".
-        DeclareLaunchArgument("required_frames",
-                              default_value=str(d["required_frames"])),
-        DeclareLaunchArgument("enable_guard",
-                              default_value=str(d["enable_guard"])),
         # Optional dashboard (3D view + live editor); started when set.
         DeclareLaunchArgument("dashboard_port",
                               default_value=str(d["dashboard_port"])),
@@ -105,8 +90,7 @@ def generate_launch_description() -> LaunchDescription:
 
     log = LogInfo(msg=(
         f"[aux_frame_manager] config: {source}; "
-        f"base='{d['base_urdf_topic']}' -> canonical='{d['output_topic']}'; "
-        f"end_effector_link='{d['end_effector_link']}'"))
+        f"base='{d['base_urdf_topic']}' -> canonical='{d['output_topic']}'"))
 
     manager = Node(
         package="aux_frame_manager",
@@ -122,20 +106,6 @@ def generate_launch_description() -> LaunchDescription:
                 LaunchConfiguration("robot_state_publisher_name"),
             "config_file": LaunchConfiguration("config_file"),
             "aux_frames": LaunchConfiguration("aux_frames"),
-        }],
-    )
-
-    guard = Node(
-        package="aux_frame_manager",
-        executable="aux_frame_guard",
-        name="aux_frame_guard",
-        output="screen",
-        condition=IfCondition(LaunchConfiguration("enable_guard")),
-        parameters=[{
-            "robot_description_topic": LaunchConfiguration("output_topic"),
-            "robot_base_link": LaunchConfiguration("robot_base_link"),
-            "end_effector_link": LaunchConfiguration("end_effector_link"),
-            "required_frames": LaunchConfiguration("required_frames"),
         }],
     )
 
@@ -156,4 +126,4 @@ def generate_launch_description() -> LaunchDescription:
         }],
     )
 
-    return LaunchDescription([log] + args + [manager, guard, dashboard])
+    return LaunchDescription([log] + args + [manager, dashboard])

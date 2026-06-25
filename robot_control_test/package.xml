@@ -1,0 +1,41 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>robot_control_test</name>
+  <version>0.1.0</version>
+  <description>
+    Interactive web bench to verify a robot works correctly with each of its
+    ros2_control controllers. A 3D canvas (Three.js, fed from the live URDF and
+    TF) shows the robot's status, while the panel discovers the controllers on
+    /controller_manager, lets you activate/deactivate them, and sends safe,
+    speed-limited test commands: joint moves for a JointTrajectoryController,
+    streamed joint setpoints for a forward-position controller, and Cartesian
+    target-pose / target-wrench jogs for the FZI cartesian_motion /
+    cartesian_compliance / cartesian_force controllers. A thin HTTP/ROS client,
+    it imports no controller internals and degrades gracefully when a robot is
+    absent.
+  </description>
+
+  <maintainer email="yizhongzhang1989@gmail.com">yizhongzhang</maintainer>
+  <license>MIT</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>std_srvs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>trajectory_msgs</exec_depend>
+  <exec_depend>controller_manager_msgs</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>ros2launch</exec_depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

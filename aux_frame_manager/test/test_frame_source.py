@@ -194,6 +194,56 @@ def test_extract_chain_and_in_chain():
     assert ok
 
 
+def test_link_names_lists_all_links():
+    from aux_frame_manager.frame_source import link_names
+    frames = [{"name": "ft_sensor_link", "parent": "link_6"}]
+    canon, _ = build_canonical_urdf(BASE, frames)
+    assert link_names(canon) == ["base_link", "link_6", "ft_sensor_link"]
+
+
+def test_partition_frames_valid_and_invalid():
+    from aux_frame_manager.frame_source import partition_frames
+    frames = [
+        {"name": "ft_sensor_link", "parent": "link_6"},           # valid
+        {"name": "compliance_link", "parent": "ft_sensor_link"},  # valid (chained)
+        {"name": "bad", "parent": "nonexistent"},                 # unknown parent
+        {"name": "base_link", "parent": "link_6"},                # name collision
+    ]
+    valid, invalid = partition_frames(frames, ["base_link", "link_6"])
+    assert [f["name"] for f in valid] == ["ft_sensor_link", "compliance_link"]
+    inv = {f["name"]: f["error"] for f in invalid}
+    assert set(inv) == {"bad", "base_link"}
+    assert "not an existing URDF link" in inv["bad"]
+    assert "collides" in inv["base_link"]
+
+
+def test_partition_frames_cascade_and_cycle():
+    from aux_frame_manager.frame_source import partition_frames
+    # cascading: comp's parent ft is itself invalid (link_6 missing) -> both bad
+    valid, invalid = partition_frames(
+        [{"name": "ft", "parent": "link_6"}, {"name": "comp", "parent": "ft"}],
+        ["base_link"])
+    assert valid == [] and {f["name"] for f in invalid} == {"ft", "comp"}
+    # a cycle leaves both unplaceable, not a crash
+    v2, i2 = partition_frames(
+        [{"name": "a", "parent": "b"}, {"name": "b", "parent": "a"}], ["base_link"])
+    assert v2 == [] and {f["name"] for f in i2} == {"a", "b"}
+
+
+def test_build_partial_canonical_keeps_base_and_valid():
+    from aux_frame_manager.frame_source import build_partial_canonical
+    frames = [{"name": "ft_sensor_link", "parent": "link_6"},
+              {"name": "bad", "parent": "nope"}]
+    canon, valid, invalid = build_partial_canonical(BASE, frames)
+    links = _links(canon)
+    assert "base_link" in links and "link_6" in links     # original URDF intact
+    assert "ft_sensor_link" in links                       # valid frame added
+    assert "bad" not in links                              # invalid frame skipped
+    assert [f["name"] for f in valid] == ["ft_sensor_link"]
+    assert [f["name"] for f in invalid] == ["bad"]
+    assert "error" in invalid[0]
+
+
 def test_in_chain_detects_missing_and_offchain():
     from aux_frame_manager.frame_source import check_frames_in_chain
     # a sibling branch off link_6 is NOT on the base->ee(=link_6) chain

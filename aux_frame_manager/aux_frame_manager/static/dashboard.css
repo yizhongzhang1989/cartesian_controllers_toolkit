@@ -131,3 +131,12 @@ html, body {
   border-radius: 9px; border: 1px solid var(--line); color: var(--muted); }
 .badge-added { color: #ffe6bd; border-color: #5a4326; background: rgba(48, 33, 12, 0.5); }
 .badge-base { color: #bfe8ff; border-color: #234a5c; background: rgba(12, 33, 48, 0.5); }
+
+/* invalid frames: the parent link is absent from the URDF (or a cycle/dup) so
+   the frame is NOT in the canonical URDF -- flag it red with the reason. */
+.erow-invalid { border-left-color: var(--warn); background: rgba(48, 14, 14, 0.32); }
+.erow-invalid .dot { background: var(--warn); }
+.erow-invalid .ename { color: #ffb4b4; }
+.erow-err { color: #ffb4b4; }
+.badge-invalid { color: #ffd2d2; border-color: #6a2a2a; background: rgba(48, 12, 12, 0.5); }
+.status-box.warn { color: #ffe0b0; }

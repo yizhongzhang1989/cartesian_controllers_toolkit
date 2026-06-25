@@ -19,9 +19,17 @@ const $ = (id) => document.getElementById(id);
 let liveFrames = [];     // [{name, parent, xyz, rpy, source}] from the snapshot
 let links = [];          // all canonical link names (parent choices)
 let lastParentFill = ""; // signature to avoid rebuilding the <select> each poll
+let lastListSig = "";    // same idea for the editable-frames list (stable buttons)
 
 function fmt3(a) {
   return "[" + (a || [0, 0, 0]).map((v) => Number(v).toFixed(3)).join(", ") + "]";
+}
+
+// HTML-escape dynamic text (frame names / error reasons) before inserting it
+// into innerHTML, so a stray '<' in a URDF name or message can't break markup.
+function esc(s) {
+  return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 // the managed (added) subset, stripped to the manager's frame schema -- the
@@ -123,11 +131,13 @@ function renderStatus(s) {
   const age = s.status_age != null ? s.status_age + "s ago" : "";
   const msg = String(st.message || "");
   const isErr = /^error/i.test(msg);
-  box.className = "status-box sm " + (isErr ? "err" : "ok");
+  const isPartial = /^partial/i.test(msg) || st.n_invalid > 0;
+  box.className = "status-box sm " + (isErr ? "err" : isPartial ? "warn" : "ok");
   const rows = [];
-  rows.push(["state", isErr ? "error" : "ok"]);
+  rows.push(["state", isErr ? "error" : isPartial ? "partial" : "ok"]);
   if (msg) rows.push(["message", msg]);
-  if (Array.isArray(st.aux_frames)) rows.push(["frames", st.aux_frames.length]);
+  if (Array.isArray(st.aux_frames)) rows.push(["valid frames", st.aux_frames.length]);
+  if (st.n_invalid) rows.push(["invalid frames", st.n_invalid]);
   if (st.output_topic) rows.push(["output", st.output_topic]);
   if (st.have_canonical != null) rows.push(["published", st.have_canonical ? "yes" : "no"]);
   if (st.mirror_to_rsp != null) rows.push(["mirror→rsp", st.mirror_to_rsp ? "yes" : "no"]);
@@ -143,21 +153,38 @@ function renderList() {
   if (!liveFrames.length) {
     host.className = "edit-list muted sm";
     host.textContent = "no editable frames";
+    lastListSig = "";
     return;
   }
+  // The viewer polls /api/state every 200 ms and re-invokes this. Rebuilding the
+  // list innerHTML each time destroyed the row buttons mid-click (so "load" took
+  // several clicks to land). Only rebuild when the frames actually changed;
+  // otherwise keep the existing DOM + click handlers stable.
+  const sig = liveFrames.map((f) => [f.name, f.parent, (f.xyz || []).join(","),
+    (f.rpy || []).join(","), f.source, f.valid, f.error].join("|")).join(";;");
+  if (sig === lastListSig) return;
+  lastListSig = sig;
   host.className = "edit-list";
   host.innerHTML = liveFrames.map((f) => {
     const safe = f.name.replace(/"/g, "&quot;");
     const base = f.source === "base";
-    const badge = base ? '<span class="badge badge-base">pre-existing</span>'
-                       : '<span class="badge badge-added">added</span>';
+    const invalid = f.valid === false;
+    const cls = invalid ? "erow-invalid" : (base ? "erow-base" : "");
+    const badge = invalid ? '<span class="badge badge-invalid">invalid</span>'
+      : base ? '<span class="badge badge-base">pre-existing</span>'
+             : '<span class="badge badge-added">added</span>';
+    // invalid frames are managed (added) -> keep them removable/editable so the
+    // operator can fix the parent or drop them; only base frames hide remove.
     const rm = base ? ""
       : '<button class="mini mini-warn" data-act="remove">remove</button>';
-    return `<div class="erow ${base ? "erow-base" : ""}" data-name="${safe}">
+    const errLine = invalid
+      ? `<div class="erow-err sm">⚠ ${esc(f.error || "invalid frame")}</div>` : "";
+    return `<div class="erow ${cls}" data-name="${safe}">
       <div class="erow-head">
-        <span class="dot"></span><b class="ename">${f.name}</b>
-        <span class="muted">← ${f.parent}</span>${badge}
+        <span class="dot"></span><b class="ename">${esc(f.name)}</b>
+        <span class="muted">← ${esc(f.parent)}</span>${badge}
       </div>
+      ${errLine}
       <div class="erow-num muted sm">xyz ${fmt3(f.xyz)} · rpy ${fmt3(f.rpy)}</div>
       <div class="erow-btns">
         <button class="mini" data-act="load">load</button>${rm}
@@ -193,6 +220,8 @@ window.__onSnapshot = (s) => {
     name: f.name, parent: f.parent,
     xyz: f.xyz || [0, 0, 0], rpy: f.rpy || [0, 0, 0],
     source: f.source || "added",
+    valid: f.valid !== false,     // invalid configured frames carry valid:false
+    error: f.error || "",         // + the reason they couldn't be placed
   }));
   // parent choices: every canonical link (a frame may hang off any link)
   links = s.links || [];

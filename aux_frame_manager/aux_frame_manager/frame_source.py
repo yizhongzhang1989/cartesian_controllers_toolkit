@@ -184,6 +184,11 @@ def _link_names(urdf_xml: str) -> List[str]:
     return [ln.get("name") for ln in root.findall("link") if ln.get("name")]
 
 
+def link_names(urdf_xml: str) -> List[str]:
+    """Public: every ``<link name=...>`` in ``urdf_xml`` (for diagnostics)."""
+    return _link_names(urdf_xml)
+
+
 def strip_aux_frames(urdf_xml: str, names: Sequence[str]) -> str:
     """Remove managed aux frames (``<link name=N>`` + the fixed ``<joint>`` whose
     child is ``N``) from a URDF, yielding the base. Idempotent: stripping a URDF
@@ -283,6 +288,101 @@ def build_canonical_urdf(incoming_urdf: str,
     if not ok:
         raise ValueError(msg)
     return augment_urdf(base, norm), norm
+
+
+def partition_frames(frames: Sequence[Mapping],
+                     base_link_names: Sequence[str]
+                     ) -> Tuple[List[Dict], List[Dict]]:
+    """Split aux frames into ``(valid, invalid)`` for PARTIAL augmentation.
+
+    Unlike :func:`order_frames` / :func:`validate_frames` (which raise on the
+    first bad frame), this NEVER raises -- it classifies every frame so the
+    manager can publish the base URDF plus whatever frames ARE placeable and
+    report the rest with a reason. Returns:
+
+    * ``valid``   -- dependency-ordered frames that can be appended (parent is a
+      base link or an earlier valid frame; unique name; no link collision);
+    * ``invalid`` -- ``{name, parent, xyz, rpy, error}`` for each frame that
+      cannot be placed: malformed; duplicate name; name collides with an
+      existing link; parent missing; parent is itself invalid; or a cycle.
+    """
+    base = set(base_link_names or [])
+    norm: List[Dict] = []
+    invalid: List[Dict] = []
+    for entry in (frames or []):
+        try:
+            norm.append(normalize_frame(entry))
+        except ValueError as exc:
+            nm = entry.get("name") if isinstance(entry, Mapping) else None
+            pr = entry.get("parent") if isinstance(entry, Mapping) else None
+            invalid.append({"name": str(nm or "?"), "parent": str(pr or ""),
+                            "xyz": [0.0, 0.0, 0.0], "rpy": [0.0, 0.0, 0.0],
+                            "error": str(exc)})
+    aux_names = {f["name"] for f in norm}
+
+    known = set(base)
+    placed: set = set()
+    valid: List[Dict] = []
+    pending = list(norm)
+    while True:
+        progressed = False
+        still: List[Dict] = []
+        for f in pending:
+            name, parent = f["name"], f["parent"]
+            if name in base:
+                invalid.append({**f, "error":
+                                f"name '{name}' collides with an existing URDF link"})
+                progressed = True
+            elif name in placed:
+                invalid.append({**f, "error": f"duplicate aux frame name '{name}'"})
+                progressed = True
+            elif parent in known:
+                valid.append(f)
+                known.add(name)
+                placed.add(name)
+                progressed = True
+            else:
+                still.append(f)
+        pending = still
+        if not progressed:
+            break
+    # Whatever still has an unresolved parent cannot be placed.
+    for f in pending:
+        parent = f["parent"]
+        if parent in aux_names:
+            err = (f"parent '{parent}' is itself an invalid or unresolved aux "
+                   f"frame (cycle, or its own parent is missing)")
+        else:
+            err = (f"parent '{parent}' is not an existing URDF link or a valid "
+                   f"aux frame")
+        invalid.append({**f, "error": err})
+    return valid, invalid
+
+
+def build_partial_canonical(incoming_urdf: str,
+                            frames: Sequence[Mapping],
+                            strip_extra: Optional[Sequence[str]] = None
+                            ) -> Tuple[str, List[Dict], List[Dict]]:
+    """Tolerant counterpart of :func:`build_canonical_urdf`.
+
+    NEVER raises on invalid aux frames: strips managed frames (loop-safe),
+    partitions the requested frames into placeable (``valid``) and unplaceable
+    (``invalid``, each with an ``error``), and augments the base with ONLY the
+    valid ones. The base URDF (plus any valid frames) is therefore ALWAYS
+    produced, so the robot still renders while the operator fixes the bad frames.
+    Returns ``(canonical_urdf, valid, invalid)``. Only a malformed BASE URDF
+    raises (ValueError / ParseError).
+    """
+    strip_names = set(strip_extra or [])
+    for f in (frames or []):
+        try:
+            strip_names.add(normalize_frame(f)["name"])
+        except ValueError:
+            pass
+    base = strip_aux_frames(incoming_urdf, strip_names)
+    base_links = _link_names(base)
+    valid, invalid = partition_frames(frames, base_links)
+    return augment_urdf(base, valid), valid, invalid
 
 
 def list_fixed_frames(urdf_xml: str) -> List[Dict]:

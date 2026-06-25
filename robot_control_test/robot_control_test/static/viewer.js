@@ -1,5 +1,10 @@
 "use strict";
-// 3D viewer for the aux_frame_manager dashboard.
+// 3D viewer for the robot_control_test dashboard (adapted from the
+// aux_frame_manager viewer: TF-based FK, no server-side Pinocchio). It renders
+// the robot at its live pose and a triad at the TCP / tip frame so you can see
+// the arm move while you drive each controller. The aux-frame markers are
+// inert here (this dashboard sends no aux_frames), leaving meshes + skeleton +
+// per-link frames + click-to-select.
 //
 // Renders the robot from the *canonical* URDF meshes (the manager's output on
 // /cartesian/robot_description) at the live pose taken from TF (server-side
@@ -29,7 +34,7 @@ const canvas = $("viewer");
 const labelsEl = $("labels");
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0f1419);
-const vw = () => canvas.clientWidth || (innerWidth - 360);
+const vw = () => canvas.clientWidth || (innerWidth - 380);
 const vh = () => canvas.clientHeight || innerHeight;
 const camera = new THREE.PerspectiveCamera(50, vw() / vh(), 0.01, 100);
 camera.up.set(0, 0, 1);
@@ -48,6 +53,8 @@ const d1 = new THREE.DirectionalLight(0xffffff, 1.2); d1.position.set(3, 5, 4); 
 const d2 = new THREE.DirectionalLight(0xffffff, 0.4); d2.position.set(-2, 3, -1); scene.add(d2);
 const grid = new THREE.GridHelper(3, 30, 0x445, 0x334); grid.rotation.x = Math.PI / 2; scene.add(grid);
 scene.add(new THREE.AxesHelper(0.25));   // base-frame triad at the origin
+const tcpAxes = new THREE.AxesHelper(0.16);   // live TCP / tip-frame triad
+tcpAxes.matrixAutoUpdate = false; tcpAxes.visible = false; scene.add(tcpAxes);
 
 const solidMat = new THREE.MeshStandardMaterial({ color: 0x9fb4c4, metalness: 0.25, roughness: 0.6 });
 const highlightMat = new THREE.MeshStandardMaterial({ color: AUX_COLOR, emissive: 0x6e3d00,
@@ -78,23 +85,38 @@ function readOpts() {
   if (el) el.addEventListener("change", () => { readOpts(); refreshStatic(); });
 });
 
+// Auto-detect whether the URDF actually carries mesh visuals. When it has none
+// (e.g. a robot described with primitive boxes/cylinders only), force skeleton
+// view: clear + disable the "mesh" checkbox so the toggle isn't a misleading
+// no-op, grey its label, and note why. Re-enable it if a model WITH meshes
+// later appears. Acts only on a state change, so it never fights a manual
+// toggle while meshes are available.
+let meshAvail = null, meshUnsup = null;
+function applyMeshAvailability(has, unsupported) {
+  if (has === meshAvail && unsupported === meshUnsup) return;
+  meshAvail = has; meshUnsup = unsupported;
+  const cb = $("show-mesh");
+  if (!cb) return;
+  cb.disabled = !has;
+  cb.checked = has;
+  opt.mesh = has;
+  cb.title = has ? ""
+    : unsupported
+      ? "this URDF's meshes aren't STL (e.g. COLLADA .dae) \u2014 this viewer "
+        + "renders STL only, so the skeleton is shown"
+      : "this URDF has no mesh visuals \u2014 skeleton view only";
+  const lab = cb.closest("label");
+  if (lab) lab.classList.toggle("opt-disabled", !has);
+  const lbl = $("mesh-lbl");
+  if (lbl) lbl.textContent = has ? "mesh"
+    : unsupported ? "mesh (unsupported)" : "mesh (none)";
+}
+
 // ---- selection ----------------------------------------------------------
 let selectedLink = "";
-function parentOf(link) {
-  // editable frames carry their own parent; any other link's parent comes from
-  // the joint tree (child -> parent). "" when unknown (e.g. the root link).
-  if (editDefs[link] && editDefs[link].parent) return editDefs[link].parent;
-  const j = jointTree.find((x) => x.child === link);
-  return j ? j.parent : "";
-}
 function setSelected(link, notify) {
   selectedLink = link || "";
   if ($("sel-link")) $("sel-link").textContent = selectedLink || "—";
-  if ($("sel-parent")) {
-    const p = selectedLink ? parentOf(selectedLink) : "";
-    $("sel-parent").textContent = p ? " ← " + p : "";
-  }
-  if (window.__lastLinkTf) placeSelection(window.__lastLinkTf);   // instant highlight
   if (notify && typeof window.__onPickLink === "function") {
     window.__onPickLink(selectedLink, !!editDefs[selectedLink],
                         editDefs[selectedLink] || null);
@@ -239,47 +261,6 @@ function placeFrames(linkTf) {
   }
 }
 
-// ---- selection highlight ------------------------------------------------
-// Works for ANY selectable frame -- a mesh link, an aux marker, or a
-// skeleton-only link with no mesh of its own. A bright green halo + triad is
-// drawn ON TOP (depthTest off) at the selected frame's pose, so the picked
-// frame is unmistakable regardless of how the robot is rendered.
-let selMarker = null;
-function ensureSelMarker() {
-  if (selMarker) return selMarker;
-  const g = new THREE.Group();
-  g.matrixAutoUpdate = false; g.visible = false;
-  // A THICK RGB axis triad at the selected frame, drawn ON TOP (depthTest off).
-  // Built from cylinders because WebGL ignores LineWidth, so the axes can be
-  // genuinely WIDE. Modest length (like a normal frame, not longer); the WIDTH
-  // is what marks the selection. No halo sphere.
-  const LEN = 0.1, RAD = 0.006;
-  const axis = (hex, dir) => {
-    const geo = new THREE.CylinderGeometry(RAD, RAD, LEN, 14);
-    geo.translate(0, LEN / 2, 0);                 // base at origin, extends +Y
-    const mesh = new THREE.Mesh(geo,
-      new THREE.MeshBasicMaterial({ color: hex, depthTest: false }));
-    mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
-    mesh.renderOrder = 999;
-    return mesh;
-  };
-  g.add(axis(0xff3b53, new THREE.Vector3(1, 0, 0)));  // X
-  g.add(axis(0x39d353, new THREE.Vector3(0, 1, 0)));  // Y
-  g.add(axis(0x3b82ff, new THREE.Vector3(0, 0, 1)));  // Z
-  scene.add(g); selMarker = g; return g;
-}
-function selectionWorld(linkTf) {
-  if (!selectedLink) return null;
-  if (linkTf && linkTf[selectedLink]) return rosMat(linkTf[selectedLink]);
-  return auxWorld(selectedLink, linkTf || {});   // aux-frame fallback
-}
-function placeSelection(linkTf) {
-  const g = ensureSelMarker();
-  const w = selectionWorld(linkTf);
-  if (!w) { g.visible = false; return; }   // no pose (e.g. an invalid aux frame)
-  g.visible = true; g.matrix.copy(w);
-}
-
 // ---- per-link name labels (HTML overlay, clustered) ---------------------
 const MERGE_PX = 18;     // screen-space merge radius (CSS px)
 function getLabelDiv(i) {
@@ -419,15 +400,6 @@ canvas.addEventListener("pointerup", (e) => {
   for (const m of Object.values(auxMarkers)) if (m.group.visible) pick.push(m.ball);
   const hit = raycaster.intersectObjects(pick, false)[0];
   if (hit && hit.object.userData.link) setSelected(hit.object.userData.link, true);
-  else setSelected("", true);                  // clicked empty space -> deselect
-});
-
-// Esc also clears the current selection (but don't steal it from form fields).
-window.addEventListener("keydown", (e) => {
-  if (e.key !== "Escape" || !selectedLink) return;
-  const t = document.activeElement;
-  if (t && /^(INPUT|SELECT|TEXTAREA)$/.test(t.tagName)) return;
-  setSelected("", true);
 });
 
 // Re-apply visibility/highlight to the static scene after a toggle change.
@@ -447,6 +419,7 @@ async function poll() {
     const ld = $("loading"); if (ld) ld.style.display = "none";
     const tf = s.link_tf || {};
     window.__hasMeshes = !!s.has_meshes;
+    applyMeshAvailability(!!s.has_meshes, !!s.mesh_unsupported);
     allLinks = s.links || Object.keys(tf);
     auxSet = new Set(s.aux_links || []);
     editDefs = {};
@@ -455,10 +428,13 @@ async function poll() {
     jointTree = s.joint_tree || [];
     if (s.has_meshes) ensureMeshes(s.visuals || []);
     ensureFrames(tf);
-    placeCurrent(tf); placeAux(tf); placeFrames(tf); placeSelection(tf); placeLabels(tf);
+    placeCurrent(tf); placeAux(tf); placeFrames(tf); placeLabels(tf);
     updateSkeleton(tf, !opt.mesh || opt.auxOnly || !s.has_meshes);
     fitView(tf);
     window.__lastLinkTf = tf;
+    const tip = s.tip_frame;
+    if (tip && tf[tip]) { tcpAxes.visible = true; tcpAxes.matrix.copy(rosMat(tf[tip])); }
+    else { tcpAxes.visible = false; }
     if ($("n-links")) $("n-links").textContent = (s.links || []).length || "—";
     if ($("n-aux")) $("n-aux").textContent = (s.aux_links || []).length || 0;
     if ($("model-pill")) {

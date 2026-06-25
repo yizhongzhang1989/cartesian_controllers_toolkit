@@ -4,11 +4,14 @@
 Subscribes to the canonical ``robot_description`` topic and verifies that the
 configured Cartesian-controller endpoint/reference frames exist AND lie on the
 ``robot_base_link`` -> ``end_effector_link`` kinematic chain (exactly FZI's
-``getChain`` + ``robotChainContains`` configure-time constraint). On success it
-latches ``<topic>_ready`` (std_msgs/Bool true); on failure it prints an
-actionable error naming the missing frames so the operator can fix the
-aux_frame_manager config/args or the launch ordering -- instead of staring at
-FZI's cryptic "robot_description is empty" / chain-build failure.
+``getChain`` + ``robotChainContains`` configure-time constraint). ``end_effector_link``
+may name ONE link or SEVERAL (``;``/``,``/whitespace-separated) -- e.g. multiple
+tools, or one manager serving multiple arms; every endpoint chain is checked and
+a required frame need only lie on one of them. On success it latches
+``<topic>_ready`` (std_msgs/Bool true); on failure it prints an actionable error
+naming the missing frames so the operator can fix the aux_frame_manager
+config/args or the launch ordering -- instead of staring at FZI's cryptic
+"robot_description is empty" / chain-build failure.
 
     ros2 run aux_frame_manager aux_frame_guard --ros-args \
         -p robot_base_link:=base_link -p end_effector_link:=compliance_link \
@@ -23,7 +26,7 @@ from rclpy.qos import (DurabilityPolicy, HistoryPolicy, QoSProfile,
                        ReliabilityPolicy)
 from std_msgs.msg import Bool, String
 
-from aux_frame_manager.frame_source import check_frames_in_chain
+from aux_frame_manager.frame_source import check_frames_in_chains, parse_link_list
 
 
 def latched_qos() -> QoSProfile:
@@ -42,7 +45,10 @@ class AuxFrameGuard(Node):
 
         self._topic = str(self.get_parameter("robot_description_topic").value)
         self._base = str(self.get_parameter("robot_base_link").value)
-        self._ee = str(self.get_parameter("end_effector_link").value)
+        # One or more endpoint links carried by a single rcl STRING param
+        # (';'/','/whitespace-separated). A lone link keeps the original
+        # behaviour; several tips support a multi-arm/multi-tool URDF.
+        self._ees = parse_link_list(self.get_parameter("end_effector_link").value)
         self._required = [str(f) for f in
                           (self.get_parameter("required_frames").value or []) if str(f)]
         self._ready = False
@@ -52,21 +58,19 @@ class AuxFrameGuard(Node):
         self.create_subscription(String, self._topic, self._on_urdf, latched_qos())
         self.get_logger().info(
             "aux_frame_guard: checking %s -> %s for frames %s on '%s'"
-            % (self._base, self._ee or "(unset)", self._required, self._topic))
+            % (self._base, self._ees or "(unset)", self._required, self._topic))
         self._publish_ready(False)
 
     def _on_urdf(self, msg: String) -> None:
-        if not msg.data or not self._ee:
+        if not msg.data or not self._ees:
             return
-        required = list(self._required)
-        if self._ee not in required:
-            required.append(self._ee)
-        ok, why = check_frames_in_chain(msg.data, self._base, self._ee, required)
+        ok, why = check_frames_in_chains(
+            msg.data, self._base, self._ees, self._required)
         if ok and not self._ready:
             self._ready = True
             self.get_logger().info(
-                "READY: canonical URDF contains %s on the %s->%s chain"
-                % (required, self._base, self._ee))
+                "READY: canonical URDF contains %s on the %s->%s chain(s)"
+                % (self._required, self._base, self._ees))
             self._publish_ready(True)
         elif not ok:
             if self._ready:

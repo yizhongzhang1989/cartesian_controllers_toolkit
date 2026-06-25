@@ -233,6 +233,7 @@ class AuxFrameDashboard(Node):
         self._editable: List[dict] = []
         self._status: Optional[dict] = None
         self._status_aux: List[str] = []
+        self._status_frames: List[dict] = []   # per-frame diags (incl. invalid)
         self._status_stamp = 0.0
         self._pkg_dirs: Dict[str, Optional[str]] = {}
 
@@ -319,6 +320,11 @@ class AuxFrameDashboard(Node):
             aux = s.get("aux_frames")
             if isinstance(aux, list):
                 self._status_aux = [str(a) for a in aux]
+            # per-frame diagnostics: includes INVALID frames (not in the URDF)
+            # with a reason, so the panel can list + highlight them.
+            frames = s.get("frames")
+            if isinstance(frames, list):
+                self._status_frames = [f for f in frames if isinstance(f, dict)]
         self._recompute_aux()
 
     # ------------------------------------------------------------------ #
@@ -397,10 +403,26 @@ class AuxFrameDashboard(Node):
             joint_tree = list(self._joint_tree)
             aux_defs = list(self._aux_defs)
             editable = list(self._editable)
+            status_frames = list(self._status_frames)
             status = self._status
             age = (time.monotonic() - self._status_stamp
                    if self._status_stamp else None)
         link_tf = self._link_tf()
+        # The editable list = every fixed frame actually IN the canonical URDF
+        # (all valid). Merge in the manager's INVALID configured frames (which
+        # are not in the URDF) so the panel can list + highlight them with a
+        # reason. Each entry is tagged valid + error for the UI.
+        known = {f.get("name") for f in editable}
+        editable_out = [{**f, "valid": True, "error": ""} for f in editable]
+        for f in status_frames:
+            if not f.get("valid", True) and f.get("name") not in known:
+                editable_out.append({
+                    "name": f.get("name", ""), "parent": f.get("parent", ""),
+                    "xyz": f.get("xyz", [0.0, 0.0, 0.0]),
+                    "rpy": f.get("rpy", [0.0, 0.0, 0.0]),
+                    "source": "added", "valid": False,
+                    "error": f.get("error", "invalid frame")})
+        n_invalid = sum(1 for f in editable_out if not f["valid"])
         return {
             "have_model": bool(links),
             "base_frame": self._base_frame,
@@ -410,7 +432,8 @@ class AuxFrameDashboard(Node):
             "base_links": base_links,
             "aux_links": aux_links,
             "aux_frames": aux_defs,
-            "editable_frames": editable,
+            "editable_frames": editable_out,
+            "n_invalid": n_invalid,
             "has_meshes": bool(visuals),
             "visuals": [
                 {"link": v["link"], "url": self._mesh_url(v["filename"]),
