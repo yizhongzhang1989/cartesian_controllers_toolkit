@@ -103,7 +103,6 @@ cartesian_controller_dashboard:
   joint_states_topic: "/joint_states"
   base_frame: "base_link"         # TCP pose display: base_frame -> tool_frame via TF
   tool_frame: "tool0"             # ROS-Industrial flange convention; override per robot
-  aux_frames_section: ""          # optional: enables the tool-frame editor when set
   service_timeout_sec: 2.0
   host: "0.0.0.0"
   port: 8120
@@ -119,3 +118,65 @@ ft_sensor_dashboard:
   push_rate: 30.0                 # SSE updates per second
   reliability: "best_effort"
   title: ""
+
+# -----------------------------------------------------------------------------
+# robot_feasibility_test -- headless engine (+ optional dashboard) that scores
+# a forward-position-controller's force-control readiness
+# -----------------------------------------------------------------------------
+robot_feasibility_test:
+  # engine connectivity
+  joint_states_topic: "/joint_states"
+  wrench_topic: ""                # "" = no wrench scoring; set your FT topic
+  controller_manager: "/controller_manager"
+  controller_name: ""             # "" = auto/operator-selected at runtime
+  send_rate: 200.0                # Hz command stream
+  default_limit_deg: 8.0          # per-joint test excursion cap
+  report_dir: "~/.ros/robot_feasibility_test/runs"
+  status_rate: 10.0
+  # dashboard (engine launch passes dashboard_port through; dashboard launch
+  # serves the UI). Robot-neutral.
+  host: "0.0.0.0"
+  dashboard_port: 8140
+  engine_node: "feasibility_test_engine"
+
+# -----------------------------------------------------------------------------
+# aux_frame_manager -- single-writer of the canonical augmented URDF.
+# Appends fixed-joint "aux" frames to the manufacturer URDF and serves the
+# result on a latched topic for the FZI cartesian controllers, mirroring it to
+# robot_state_publisher for TF. Two launch files share this section:
+#   * aux_frame_manager.launch.py      -- manager (+ optional dashboard)
+#   * cartesian_urdf_source.launch.py  -- manager + pre-activate guard (+ dashboard)
+# FRAMES: this packaged fallback intentionally defines NO aux_frames -- it is
+# robot-neutral. Put your robot's frames under `aux_frame_manager.aux_frames`
+# (a list) in your robot_config.yaml; the node reads its OWN section by default,
+# so launching it appends those frames. Booleans are quoted because these
+# values become launch-argument strings.
+# -----------------------------------------------------------------------------
+aux_frame_manager:
+  base_urdf_topic: "/robot_description"            # manufacturer URDF in
+  output_topic: "/cartesian/robot_description"     # canonical augmented URDF out
+  update_robot_state_publisher: "true"             # mirror canonical URDF to rsp (TF)
+  robot_state_publisher_name: "robot_state_publisher"
+  config_file: ""           # force a specific yaml ("" = auto-resolve via cct_common)
+  # root TF frame: cartesian_urdf_source exposes it as `robot_base_link`,
+  # aux_frame_manager as `base_frame` (both default to base_link).
+  robot_base_link: "base_link"
+  base_frame: "base_link"
+  dashboard_port: ""        # optional web dashboard: "" = off, else a port (e.g. 8160)
+
+# -----------------------------------------------------------------------------
+# robot_control_test -- interactive web bench (3D canvas) to verify a robot
+# works with each of its ros2_control controllers. Discovers the controllers on
+# the controller_manager, activates one, and sends safe speed-limited test
+# commands: joint-trajectory / forward-position joint jogs, and the FZI
+# cartesian motion / compliance / force targets. Robot-neutral.
+# -----------------------------------------------------------------------------
+robot_control_test:
+  dashboard_port: 8200                            # web UI port
+  controller_manager: "/controller_manager"       # discover / switch controllers
+  robot_description_topic: "/robot_description"    # URDF source for the 3D model
+  joint_states_topic: "/joint_states"              # live joint feedback
+  base_frame: "base_link"        # TF frame the 3D view / Cartesian targets use
+  tip_frame: ""                  # TCP frame ("" -> the URDF's last leaf link)
+  max_joint_speed: 0.5           # rad/s cap for JTC moves + forward-position ramps
+  send_rate: 100.0               # Hz forward-position command stream rate

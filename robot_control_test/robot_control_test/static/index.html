@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>robot_control_test — controller bench</title>
+  <link rel="stylesheet" href="/dashboard.css" />
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "/vendor/three.module.js",
+      "three/addons/": "/vendor/addons/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <!-- 3D viewer fills the area to the right of the control panel. -->
+  <div id="stage">
+    <canvas id="viewer"></canvas>
+    <div id="labels"></div>
+
+    <!-- top-left: connection + live TCP readout -->
+    <div id="hud">
+      <span id="conn" class="pill pill-bad">connecting…</span>
+      <span id="tcp-read" class="muted">no TCP</span>
+    </div>
+
+    <!-- top-right floating overlay: 3D view options -->
+    <div id="view-float">
+      <div class="vf-header">
+        <span class="vf-title">3D View</span>
+        <span class="pill" id="model-pill">—</span>
+        <button id="vf-collapse" type="button" class="vf-toggle"
+                aria-expanded="true" title="Collapse">−</button>
+      </div>
+      <div class="vf-body" id="vf-body">
+        <div class="vf-rows">
+          <span>links</span><span class="num" id="n-links">—</span>
+          <span>selected</span><span class="num" id="sel-link">—</span>
+        </div>
+        <div class="vf-controls">
+          <label><input type="checkbox" id="show-mesh" checked> <span id="mesh-lbl">mesh</span></label>
+          <label><input type="checkbox" id="show-labels"> labels</label>
+          <label><input type="checkbox" id="show-frames"> frames</label>
+        </div>
+        <div class="vf-buttons">
+          <button id="fit" type="button" class="btn sm">Fit view</button>
+        </div>
+        <div class="vf-hint">drag to orbit · wheel to zoom · click a link to select</div>
+      </div>
+    </div>
+  </div>
+  <div id="loading"><div class="spinner"></div>Waiting for /robot_description…</div>
+
+  <div id="panel">
+    <h1>Robot Control Test <span class="muted">· controller bench</span></h1>
+
+    <!-- Controllers: discover, activate / deactivate -->
+    <section class="card">
+      <h2>Controllers <span class="muted" id="cm-status">—</span></h2>
+      <div class="vf-hint">Engage a controller to drive it. Engaging one
+        deactivates any other controller that claims the same joints.</div>
+      <div id="ctrl-list" class="ctrl-list">
+        <div class="muted sm">discovering controllers…</div>
+      </div>
+    </section>
+
+    <!-- Joint control (JointTrajectoryController / forward-position) -->
+    <section class="card" id="card-joint" hidden>
+      <h2>Joint control <span class="warn" id="joint-ctrl-name"></span></h2>
+      <div class="row">
+        <label class="inline">step (deg)
+          <input id="joint-step" type="number" value="5" step="1"
+                 min="0.1" class="num-in" />
+        </label>
+        <button id="btn-joint-sync" class="btn sm">Sync to current</button>
+        <button id="btn-joint-move" class="btn sm" hidden>Move (JTC)</button>
+        <button id="btn-joint-stop" class="btn btn-stop sm">Stop</button>
+      </div>
+      <div id="joint-rows" class="joint-rows"></div>
+      <div class="vf-hint" id="joint-mode-hint"></div>
+    </section>
+
+    <!-- Cartesian control (cartesian_motion / cartesian_compliance) -->
+    <section class="card" id="card-cart" hidden>
+      <h2>Cartesian jog <span class="warn" id="cart-ctrl-name"></span></h2>
+      <div class="row">
+        <label class="inline">pos step (mm)
+          <input id="cart-step-mm" type="number" value="20" step="1"
+                 min="0.1" class="num-in" />
+        </label>
+        <label class="inline">rot step (deg)
+          <input id="cart-step-deg" type="number" value="5" step="0.5"
+                 min="0.1" class="num-in" />
+        </label>
+        <button id="btn-cart-reset" class="btn sm">Reset to TCP</button>
+      </div>
+      <div class="jog-grid" id="cart-jog"></div>
+      <div class="vf-hint" id="cart-read">target —</div>
+    </section>
+
+    <!-- Wrench control (cartesian_force / cartesian_compliance) -->
+    <section class="card" id="card-wrench" hidden>
+      <h2>Target wrench <span class="warn" id="wrench-ctrl-name"></span></h2>
+      <div class="wrench-grid">
+        <label>Fx <input id="w-fx" type="number" value="0" step="1" /></label>
+        <label>Fy <input id="w-fy" type="number" value="0" step="1" /></label>
+        <label>Fz <input id="w-fz" type="number" value="0" step="1" /></label>
+        <label>Tx <input id="w-tx" type="number" value="0" step="0.5" /></label>
+        <label>Ty <input id="w-ty" type="number" value="0" step="0.5" /></label>
+        <label>Tz <input id="w-tz" type="number" value="0" step="0.5" /></label>
+      </div>
+      <div class="row">
+        <button id="btn-wrench-send" class="btn btn-go">Send wrench</button>
+        <button id="btn-wrench-zero" class="btn btn-stop">Zero</button>
+      </div>
+      <div class="vf-hint">Force in N, torque in N·m, expressed in the base
+        frame. The robot must support a force/compliance controller for this.</div>
+    </section>
+
+    <div class="msg" id="action-msg"></div>
+  </div>
+
+  <!-- control panel logic (classic script) -->
+  <script src="/dashboard.js"></script>
+  <!-- 3D viewer (module): robot at the live TF pose -->
+  <script type="module" src="/viewer.js"></script>
+</body>
+</html>

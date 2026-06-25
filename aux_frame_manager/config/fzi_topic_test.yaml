@@ -1,0 +1,40 @@
+# Mock-test controller config: a Cartesian motion controller that reads its
+# URDF ONLY from the canonical topic (urdf_from_topic=true) and uses the AUX
+# frame `op_tip` as its end_effector_link. `op_tip` is injected ONLY by
+# aux_frame_manager (it is NOT in the controller_manager's URDF), so reaching
+# `active` proves the topic-sourced URDF is the controller's sole URDF source.
+controller_manager:
+  ros__parameters:
+    update_rate: 100
+
+    cartesian_motion_controller:
+      type: cartesian_motion_controller/CartesianMotionController
+
+cartesian_motion_controller:
+  ros__parameters:
+    # --- topic-sourced URDF (the change under test) ---
+    urdf_from_topic: true
+    robot_description_topic: "/cartesian/robot_description"
+    # --- ee is a frame present ONLY in the canonical (manager) URDF ---
+    end_effector_link: "op_tip"
+    robot_base_link: "base_link"
+    joints:
+      - arm_1_joint_1
+      - arm_1_joint_2
+      - arm_1_joint_3
+      - arm_1_joint_4
+      - arm_1_joint_5
+      - arm_1_joint_6
+    command_interfaces:
+      - position
+    solver:
+      error_scale: 1.0
+      iterations: 10
+      publish_state_feedback: true
+    pd_gains:
+      trans_x: {p: 1.0}
+      trans_y: {p: 1.0}
+      trans_z: {p: 1.0}
+      rot_x: {p: 1.0}
+      rot_y: {p: 1.0}
+      rot_z: {p: 1.0}

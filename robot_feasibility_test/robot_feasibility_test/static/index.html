@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Robot Feasibility Test</title>
+<link rel="stylesheet" href="/static/dashboard.css">
+</head>
+<body>
+  <header>
+    <h1>Robot Feasibility Test</h1>
+    <div class="sub">Forward-position-controller capability test ·
+      <span id="conn" class="status">connecting…</span></div>
+  </header>
+
+  <main>
+    <section class="panel" id="setup">
+      <h2>1 · Setup</h2>
+      <div class="grid">
+        <label>Controller
+          <select id="sel-ctrl"></select>
+        </label>
+        <label>Wrench ground-truth
+          <span id="wrench-state" class="badge">—</span>
+        </label>
+      </div>
+
+      <div class="joints">
+        <div class="joints-head">
+          <span>Joints to test</span>
+          <span>
+            <button id="btn-all" type="button" class="ghost">All</button>
+            <button id="btn-none" type="button" class="ghost">None</button>
+          </span>
+        </div>
+        <div id="joint-list" class="joint-list"><em>waiting for controller…</em></div>
+      </div>
+
+      <details class="params">
+        <summary>Test parameters</summary>
+        <div class="grid">
+          <label>Amplitude <input id="p-amp" type="number" step="0.5" value="4"> deg</label>
+          <label>Frequency <input id="p-freq" type="number" step="0.05" value="0.2"> Hz</label>
+          <label>Segment <input id="p-seg" type="number" step="1" value="9"> s</label>
+          <label>Stair step <input id="p-stair" type="number" step="0.5" value="1.5"> deg</label>
+          <label>Smoother cutoff <input id="p-lp" type="number" step="1" value="10"> Hz</label>
+          <label>Safety limit <input id="p-limit" type="number" step="1" value="8"> deg</label>
+          <label>Resonance tap <input id="p-res" type="number" step="0.5" value="2"> deg</label>
+          <label>Sweep amplitude <input id="p-sweep" type="number" step="0.5" value="1.5"> deg</label>
+          <label>Sweep band <input id="p-sweep-f0" type="number" step="0.1" value="0.3"> –
+            <input id="p-sweep-f1" type="number" step="0.5" value="6"> Hz</label>
+        </div>
+        <div class="tests">
+          <label><input type="checkbox" class="t-test" value="smooth" checked> Smooth move</label>
+          <label><input type="checkbox" class="t-test" value="stair" checked> Stair move (stepped)</label>
+          <label><input type="checkbox" class="t-test" value="smoothed" checked> Smoothed (stair + LP)</label>
+          <label><input type="checkbox" class="t-test" value="step"> Step response</label>
+          <label><input type="checkbox" class="t-test" value="resonance"> Resonance (ring-down → f_n, ζ)</label>
+          <label><input type="checkbox" class="t-test" value="sweep"> Frequency sweep (Bode BW)</label>
+        </div>
+      </details>
+
+      <div class="run-row">
+        <button id="btn-run" type="button" class="primary">▶ Run test</button>
+        <button id="btn-stop" type="button" class="danger" disabled>■ Stop</button>
+        <span id="status" class="status">idle</span>
+      </div>
+      <div class="safety">⚠ The selected joint moves ±limit around its current pose.
+        Keep the workspace clear and an e-stop within reach.</div>
+    </section>
+
+    <section class="panel">
+      <h2>2 · Live trace
+        <span id="prog" class="badge">—</span></h2>
+      <div class="legend">
+        <span><i class="sw" style="background:#9aa4b2"></i>command</span>
+        <span><i class="sw" style="background:#38bdf8"></i>actual</span>
+        <span id="lg-force" hidden><i class="sw" style="background:#f59e0b"></i>force HF (N)</span>
+      </div>
+      <canvas id="plot" width="900" height="320"></canvas>
+    </section>
+
+    <section class="panel">
+      <h2>3 · Results</h2>
+      <div class="hint">force HF = real end-effector vibration (independent wrench sensor);
+        pos HF = joint-motion ripple; lag = phase delay; RMSE = tracking error.</div>
+      <div id="report-banner" class="report-banner" hidden></div>
+      <table id="results">
+        <thead><tr>
+          <th>joint</th><th>test</th><th>pos HF</th><th>force HF (N)</th>
+          <th>lag (ms)</th><th>RMSE</th><th>amp</th><th>dynamics</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <section class="panel">
+      <h2>4 · Saved runs
+        <button id="btn-refresh-runs" type="button" class="ghost">↻ Refresh</button>
+      </h2>
+      <div class="hint">Every run is saved as a self-contained report (plots + metrics)
+        you can open later. Folder: <code id="runs-dir">—</code></div>
+      <div id="runs-list" class="runs-list"><em>no saved runs yet</em></div>
+    </section>
+  </main>
+
+  <script src="/static/dashboard.js"></script>
+</body>
+</html>

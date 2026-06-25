@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aux_frame_manager · dashboard</title>
+<link rel="stylesheet" href="/dashboard.css">
+<script type="importmap">
+{ "imports": {
+    "three": "/vendor/three.module.js",
+    "three/addons/": "/vendor/addons/"
+} }
+</script>
+</head>
+<body>
+  <canvas id="viewer"></canvas>
+  <div id="labels"></div>
+  <div id="loading"><div class="sp"></div>waiting for canonical URDF…</div>
+
+  <!-- on-canvas floating overlay: view options + legend + counts -->
+  <div id="view-float">
+    <div class="vf-head">
+      <span class="vf-title">3D View</span>
+      <span id="model-pill" class="pill">—</span>
+      <button id="vf-collapse" aria-expanded="true" title="collapse">−</button>
+    </div>
+    <div class="vf-body">
+      <div class="legend">
+        <span class="lg"><i class="sw sw-orig"></i>original link</span>
+        <span class="lg"><i class="sw sw-aux"></i>added aux frame</span>
+        <span class="lg"><i class="sw sw-base"></i>pre-existing frame</span>
+      </div>
+      <div class="vf-opts">
+        <label><input type="checkbox" id="show-mesh" checked> meshes</label>
+        <label><input type="checkbox" id="show-labels" checked> labels</label>
+        <label><input type="checkbox" id="show-frames"> frames</label>
+        <label><input type="checkbox" id="show-aux-only"> aux only</label>
+        <button id="fit" class="mini">fit</button>
+      </div>
+      <div class="vf-counts">
+        <span>links <b id="n-links">—</b></span>
+        <span>aux <b id="n-aux">—</b></span>
+        <span>sel <b id="sel-link">—</b><b id="sel-parent" class="muted"></b></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- side panel: status + aux-frame editor (test interface) -->
+  <aside id="panel">
+    <h1>aux_frame_manager</h1>
+    <div class="sub" id="sub-line">—</div>
+
+    <section class="card">
+      <h2>Status</h2>
+      <div id="status-box" class="status-box muted sm">waiting…</div>
+    </section>
+
+    <section class="card">
+      <h2>Edit / add a frame <span class="warn sm">(live)</span></h2>
+      <div class="muted sm" style="margin:-2px 0 8px">
+        Any fixed frame is editable. For a <b>pre-existing</b> frame only the
+        offset (xyz / rpy) is applied; <b>parent</b> is used only when creating a
+        new frame.
+      </div>
+      <div class="form">
+        <label>name <input id="f-name" placeholder="e.g. op_tip"></label>
+        <label>parent
+          <select id="f-parent"><option value="">— pick a link —</option></select>
+        </label>
+        <div class="triple">
+          <label>x <input id="f-x" type="number" step="0.001" value="0"></label>
+          <label>y <input id="f-y" type="number" step="0.001" value="0"></label>
+          <label>z <input id="f-z" type="number" step="0.001" value="0"></label>
+        </div>
+        <div class="triple">
+          <label>roll <input id="f-roll" type="number" step="0.01" value="0"></label>
+          <label>pitch <input id="f-pitch" type="number" step="0.01" value="0"></label>
+          <label>yaw <input id="f-yaw" type="number" step="0.01" value="0"></label>
+        </div>
+        <div class="btn-row">
+          <button id="btn-add" class="btn btn-go">Add / update</button>
+          <button id="btn-load-sel" class="btn">Load selected</button>
+        </div>
+      </div>
+      <div id="edit-msg" class="msg muted sm"></div>
+    </section>
+
+    <section class="card">
+      <h2>Editable frames</h2>
+      <div id="edit-list" class="edit-list muted sm">no editable frames</div>
+      <div class="btn-row">
+        <button id="btn-apply" class="btn" title="re-send the added aux frame list">Re-apply added</button>
+        <button id="btn-clear" class="btn btn-warn" title="remove ALL added aux frames (pre-existing frames stay)">Clear added</button>
+      </div>
+      <div id="ops-msg" class="msg muted sm"></div>
+    </section>
+  </aside>
+
+  <script type="module" src="/viewer.js"></script>
+  <script src="/dashboard.js"></script>
+</body>
+</html>

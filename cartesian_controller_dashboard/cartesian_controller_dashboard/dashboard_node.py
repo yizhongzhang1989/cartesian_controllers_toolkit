@@ -630,13 +630,14 @@ class DashboardNode(Node):
         ("base_frame", "base_link"),
         ("tool_frame", "tool0"),
         ("service_timeout_sec", 2.0),
-        # Top-level YAML key in ``robot_config.yaml`` whose
-        # ``aux_frames`` list the dashboard's "Tool frames" panel
-        # reads / writes.  Empty string disables the panel (the
-        # API returns a clear error).  Per-robot workspaces should
-        # set this to their bringup package name (e.g.
-        # ``my_robot_bringup``).
-        ("aux_frames_section", ""),
+        # Namespace of the aux_frame_manager node that owns the canonical
+        # augmented robot_description (single-writer architecture).  When a
+        # manager is subscribed to ``<ns>/set_aux_frames`` the "Tool frames"
+        # editor routes saves through it (so FZI controllers reading the
+        # canonical URDF topic swap their chain live); otherwise it falls
+        # back to pushing the URDF straight to robot_state_publisher + each
+        # controller's parameter.  Empty disables manager routing.
+        ("aux_frame_manager_ns", "/aux_frame_manager"),
         # http -----------------------------------------------------------
         ("host", "0.0.0.0"),
         ("port", 8120),
@@ -670,7 +671,11 @@ class DashboardNode(Node):
         self._base_frame = str(gp("base_frame")).strip("/")
         self._tool_frame = str(gp("tool_frame")).strip("/")
         self._service_timeout = float(gp("service_timeout_sec"))
-        self._aux_frames_section = str(gp("aux_frames_section")).strip()
+        # Auxiliary frames live under the standard ``aux_frame_manager:``
+        # section of robot_config.yaml (the manager node reads its own
+        # section); the "Tool frames" editor reads / writes that same list.
+        self._aux_frames_section = "aux_frame_manager"
+        self._aux_frame_manager_ns = str(gp("aux_frame_manager_ns")).rstrip("/")
         self._host = str(gp("host"))
         self._port = int(gp("port"))
 
@@ -825,6 +830,19 @@ class DashboardNode(Node):
             SetParameters,
             "/robot_state_publisher/set_parameters",
             callback_group=self._cbgroup)
+
+        # Publisher to the aux_frame_manager's live editor.  When a manager
+        # is running it is the SOLE writer of the canonical URDF the FZI
+        # controllers read (urdf_from_topic); the "Tool frames" editor hands
+        # it the full frame list on save and the manager re-augments,
+        # republishes the canonical topic (controllers swap chain live) and
+        # mirrors to rsp (TF).  Created only when a namespace is configured;
+        # the live-apply path checks get_subscription_count() to decide
+        # whether a manager is actually present before routing to it.
+        self._aux_mgr_pub = None
+        if self._aux_frame_manager_ns:
+            self._aux_mgr_pub = self.create_publisher(
+                String, f"{self._aux_frame_manager_ns}/set_aux_frames", 10)
 
         # The FZI cartesian controllers fork has been patched to react
         # to ``robot_description`` parameter updates on their own node
@@ -2105,8 +2123,8 @@ class DashboardNode(Node):
     # ``config/robot_config.yaml`` via the line-targeted
     # ``cct_common.config_manager.save_aux_frames`` helper which preserves
     # comments and unrelated keys; they take effect on the next robot
-    # bringup.  The top-level YAML key that owns the list is set by
-    # the ``aux_frames_section`` parameter (per-robot configuration).
+    # bringup.  The top-level YAML key that owns the list is the standard
+    # ``aux_frame_manager:`` section (the manager node reads its own section).
     #
     # Adding, renaming, or removing aux_frames is intentionally NOT
     # exposed -- those edits ripple into the per-robot ``fzi_preset.yaml``
@@ -2118,12 +2136,6 @@ class DashboardNode(Node):
             raise RuntimeError(
                 "cct_common.config_manager not importable: "
                 f"{_COMMON_IMPORT_ERROR}")
-        if not self._aux_frames_section:
-            raise RuntimeError(
-                "aux_frames panel disabled: "
-                "set the 'aux_frames_section' parameter to the "
-                "top-level robot_config.yaml key that owns the "
-                "aux_frames list (e.g. the bringup package name)")
         cfg = _get_config()
         config_path = cfg.config_path
         if not config_path:
@@ -2158,12 +2170,6 @@ class DashboardNode(Node):
             raise RuntimeError(
                 "cct_common.config_manager not importable: "
                 f"{_COMMON_IMPORT_ERROR}")
-        if not self._aux_frames_section:
-            raise RuntimeError(
-                "aux_frames panel disabled: "
-                "set the 'aux_frames_section' parameter to the "
-                "top-level robot_config.yaml key that owns the "
-                "aux_frames list (e.g. the bringup package name)")
         if not isinstance(body, dict):
             raise RuntimeError("body must be a JSON object")
         frames_in = body.get("frames")
@@ -2222,7 +2228,12 @@ class DashboardNode(Node):
         # for the next launch).
         live = self._apply_aux_frames_live()
 
-        if live["ok"]:
+        if live["ok"] and live.get("via") == "aux_frame_manager":
+            message = ("saved; pushed to aux_frame_manager -- it republished "
+                       "the canonical URDF (an engaged FZI controller swaps "
+                       "its KDL chain live) and refreshed TF via its rsp "
+                       "mirror")
+        elif live["ok"]:
             message = ("saved; static TF updated live via "
                        "robot_state_publisher")
             if live.get("missing"):
@@ -2254,8 +2265,23 @@ class DashboardNode(Node):
     # Live URDF push to robot_state_publisher
     # ------------------------------------------------------------------
     def _apply_aux_frames_live(self) -> Dict[str, Any]:
-        """Rebuild ``robot_description`` from the on-disk aux_frames and
-        push it to ``/robot_state_publisher`` via SetParameters.
+        """Apply the on-disk aux_frames to the live system.
+
+        Two routing modes, auto-selected:
+
+        * **aux_frame_manager present** (the single-writer architecture):
+          publish the full frame list to ``<ns>/set_aux_frames``.  The
+          manager re-augments the canonical URDF, republishes it on
+          ``/cartesian/robot_description`` -- so FZI controllers running in
+          ``urdf_from_topic`` mode swap their KDL chain live -- and mirrors
+          it to ``robot_state_publisher`` so ``/tf_static`` refreshes.  This
+          is the ONLY path that reaches topic-mode controllers, which ignore
+          their own ``robot_description`` parameter.
+
+        * **legacy** (no manager subscribed): rebuild ``robot_description``
+          from the URDF the rsp is publishing and push it to
+          ``/robot_state_publisher`` and to each controller's
+          ``robot_description`` parameter (the param-mode rebuild path).
 
         Returns a dict ``{"ok": bool, "error": Optional[str], ...}``
         suitable to embed in the api_set_aux_frames response.  All
@@ -2264,7 +2290,53 @@ class DashboardNode(Node):
         human-readable ``error`` so the operator can decide whether to
         fall back to a launch restart.
         """
-        if _update_aux_frames is None or _read_aux_frames is None:
+        if _read_aux_frames is None:
+            return {
+                "ok":    False,
+                "error": ("cct_common.config_manager not "
+                          f"importable: {_COMMON_IMPORT_ERROR}"),
+            }
+
+        # Read the full aux_frames list back from disk (post-save) so
+        # every entry's xyz/rpy is up-to-date.  Both routing modes need it.
+        cfg = _get_config()
+        config_path = cfg.config_path if cfg else None
+        if not config_path:
+            return {"ok": False, "error": "config path not resolved"}
+        try:
+            frames = _read_aux_frames(config_path, self._aux_frames_section)
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False,
+                    "error": f"could not re-read aux_frames: {exc}"}
+
+        # --- Preferred path: route through aux_frame_manager ----------
+        # Only when a manager is actually subscribed (and we have frames to
+        # send -- never publish an empty list, which would wipe the
+        # manager's frames).  The manager owns the canonical URDF topic the
+        # FZI controllers read AND mirrors to rsp, so this single publish
+        # updates both the engaged controller's chain and TF.
+        if (self._aux_mgr_pub is not None and frames
+                and self._aux_mgr_pub.get_subscription_count() > 0):
+            try:
+                msg = String()
+                msg.data = json.dumps(frames)
+                self._aux_mgr_pub.publish(msg)
+            except Exception as exc:  # noqa: BLE001
+                return {
+                    "ok":    False,
+                    "error": ("failed to publish to "
+                              f"{self._aux_frame_manager_ns}/set_aux_frames: "
+                              f"{exc}"),
+                }
+            return {
+                "ok":      True,
+                "updated": len(frames),
+                "missing": [],
+                "via":     "aux_frame_manager",
+            }
+
+        # --- Legacy path: rebuild URDF + push to rsp and controllers --
+        if _update_aux_frames is None:
             return {
                 "ok":    False,
                 "error": ("cct_common.urdf_loader not "
@@ -2284,18 +2356,6 @@ class DashboardNode(Node):
                 "error": ("no cached /robot_description yet -- is "
                           "robot_state_publisher running?"),
             }
-
-        # Read the full aux_frames list back from disk (post-save) so
-        # every entry's xyz/rpy is up-to-date.
-        cfg = _get_config()
-        config_path = cfg.config_path if cfg else None
-        if not config_path:
-            return {"ok": False, "error": "config path not resolved"}
-        try:
-            frames = _read_aux_frames(config_path, self._aux_frames_section)
-        except Exception as exc:  # noqa: BLE001
-            return {"ok": False,
-                    "error": f"could not re-read aux_frames: {exc}"}
 
         try:
             result = _update_aux_frames(urdf_xml, frames)

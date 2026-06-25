@@ -1,0 +1,36 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>aux_frame_manager</name>
+  <version>0.1.0</version>
+  <description>
+    Single-writer owner of the canonical augmented robot_description. Consumes
+    the manufacturer URDF, appends configured auxiliary fixed frames (FT-sensor,
+    compliance, operation origin) from a config file and/or direct arguments,
+    and publishes the single canonical URDF on a latched topic that the FZI
+    Cartesian controllers read as their only URDF source. Optionally mirrors the
+    canonical URDF to robot_state_publisher so TF/RViz share one source of truth.
+  </description>
+
+  <maintainer email="yizhongzhang1989@gmail.com">yizhongzhang</maintainer>
+  <license>MIT</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>rcl_interfaces</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+  <exec_depend>cct_common</exec_depend>
+  <exec_depend>ros2launch</exec_depend>
+  <!-- optional dashboard: reads live link poses from TF -->
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
