@@ -904,13 +904,12 @@ class RobotControlTest(Node):
                  [m[2][0], m[2][1], m[2][2]]]
             tcp = {"xyz": [m[0][3], m[1][3], m[2][3]], "rpy": _R_to_rpy(R),
                    "tip": tip}
-        # The 3D viewer renders STL only, so mesh visuals in another format
-        # (e.g. UR ships COLLADA .dae) are NOT displayable here. Base
-        # has_meshes on the RENDERABLE (STL) visuals so the dashboard shows the
-        # skeleton and auto-disables the mesh toggle, and flag the case where
-        # the URDF DOES declare meshes but none are renderable.
+        # The 3D viewer renders STL and COLLADA (.dae) meshes. Base has_meshes
+        # on the RENDERABLE visuals so the dashboard auto-disables the mesh
+        # toggle (and shows the skeleton) only for URDFs whose meshes are in
+        # some other, unsupported format.
         renderable = [v for v in visuals
-                      if str(v["filename"]).lower().endswith(".stl")]
+                      if str(v["filename"]).lower().endswith((".stl", ".dae"))]
         mesh_unsupported = bool(visuals) and not renderable
         return {
             "have_model": bool(links),
@@ -929,6 +928,7 @@ class RobotControlTest(Node):
             "link_tf": link_tf,
             "movable_joints": movable,
             "joint_values": joint_pos,
+            "joint_state_names": list(joint_pos.keys()),
             "js_age": round(js_age, 2) if js_age is not None else None,
             "controllers": controllers,
             "engaged": engaged,
@@ -987,8 +987,16 @@ class RobotControlTest(Node):
                     data = dash.read_mesh(qs.get("pkg", ""), qs.get("path", ""))
                     if data is None:
                         return self._send(404, "not found", "text/plain")
+                    rel = qs.get("path", "").lower()
+                    if rel.endswith(".dae"):
+                        ctype = "model/vnd.collada+xml"
+                    elif rel.endswith(".stl"):
+                        ctype = "model/stl"
+                    else:
+                        ctype = (mimetypes.guess_type(rel)[0]
+                                 or "application/octet-stream")
                     self.send_response(200)
-                    self.send_header("Content-Type", "model/stl")
+                    self.send_header("Content-Type", ctype)
                     self.send_header("Content-Length", str(len(data)))
                     self.send_header("Cache-Control", "public, max-age=3600")
                     self.end_headers()

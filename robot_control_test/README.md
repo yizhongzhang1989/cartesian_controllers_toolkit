@@ -19,10 +19,14 @@ Pinocchio / no `ikt_core` dependency), so it stays inside
 
 1. Reads the robot's links / movable joints from **`/robot_description`** (URDF)
    and the live per-link poses from **TF** (`base_frame → link`) to draw the
-   robot in 3D (meshes + skeleton + a TCP triad). The viewer renders **STL**
-   meshes; robots whose URDF ships another format (e.g. UR's COLLADA `.dae`)
-   show the kinematic skeleton instead, and the **mesh** toggle disables itself
-   automatically (labelled *mesh (unsupported)*).
+   robot in 3D (meshes + skeleton + a TCP triad) with a live **joint-angle
+   panel** (one colour-coded bar per joint, named and ordered to match the
+   `/joint_states` topic, in degrees) and a joint-state freshness readout. The
+   viewer renders **STL** and
+   **COLLADA (`.dae`)** meshes (so both Duco and UR robots show full geometry);
+   a robot whose URDF ships some other mesh format shows the kinematic skeleton
+   instead, and the **mesh** toggle disables itself automatically (labelled
+   *mesh (unsupported)*).
 2. Discovers every controller on **`/controller_manager`** and classifies it:
 
    | kind | example plugin type | how you drive it |
