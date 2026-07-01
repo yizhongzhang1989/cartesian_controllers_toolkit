@@ -9,20 +9,24 @@ safe, speed-limited test commands while the 3D view shows the arm move. Use it
 to answer *"is this controller wired up and does the robot actually move the way
 I expect?"* before building anything on top of it.
 
-It is modelled on
-[`ikt_pose_commander`](../../inverse_kinematics_toolkit/ikt_pose_commander) and
-the `aux_frame_manager` dashboard, but uses **TF for forward kinematics** (no
-Pinocchio / no `ikt_core` dependency), so it stays inside
-`cartesian_controllers_toolkit`.
+It uses **TF for forward kinematics** (so it needs no Pinocchio or other
+kinematics library), depending only on `rclpy` and standard ROS 2 message / TF
+packages. That keeps it self-contained, so it drops into any ros2_control robot
+workspace.
 
 ## What it does
 
 1. Reads the robot's links / movable joints from **`/robot_description`** (URDF)
    and the live per-link poses from **TF** (`base_frame → link`) to draw the
-   robot in 3D (meshes + skeleton + a TCP triad). The viewer renders **STL**
-   meshes; robots whose URDF ships another format (e.g. UR's COLLADA `.dae`)
-   show the kinematic skeleton instead, and the **mesh** toggle disables itself
-   automatically (labelled *mesh (unsupported)*).
+   robot in 3D (meshes + skeleton + a TCP triad) with a live **joint-angle
+   panel** (one colour-coded bar per joint, labelled with the real URDF joint
+   name and ordered along the kinematic chain — base → tip — regardless of the
+   `/joint_states` publish order; in degrees, or mm for a prismatic joint) and a
+   joint-state freshness readout. The viewer renders **STL** and **COLLADA
+   (`.dae`)** meshes (so both Duco and UR robots show full geometry); a robot
+   whose URDF ships some other mesh format shows the kinematic skeleton instead,
+   and the **mesh** toggle disables itself automatically (labelled
+   *mesh (unsupported)*).
 2. Discovers every controller on **`/controller_manager`** and classifies it:
 
    | kind | example plugin type | how you drive it |
@@ -39,6 +43,16 @@ Pinocchio / no `ikt_core` dependency), so it stays inside
 4. Drives the engaged controller with **speed-limited** commands and shows the
    live joint angles / TCP pose so you can confirm correct, safe motion.
 
+### The 3D view
+
+A floating **3D View** panel (top-right) reports the link / joint counts and the
+currently **selected** link and its **parent**, with toggles for **mesh**,
+**labels** and per-link **frames**, plus **Fit view** (and a collapse button).
+Drag to orbit, wheel to zoom. **Click a link** — its mesh or its label — to
+select it: the mesh is highlighted, a thick RGB triad is drawn at that link's
+frame, and its parent is shown in the panel. Click empty space or press **Esc**
+to deselect. Turning **frames** on additionally draws a thin triad at every link.
+
 ## Safety
 
 - The node **commands the real robot** — keep the workspace clear and an e-stop
@@ -49,6 +63,25 @@ Pinocchio / no `ikt_core` dependency), so it stays inside
   **current** pose, so engaging does not jump the arm; the first jog moves it.
 - **Stop** holds the arm at its current measured pose; **Disengage** deactivates
   the controller.
+
+## Requirements & build
+
+- **ROS 2** (tested on Humble) with `ros2_control`, and a robot already up (real
+  or `use_fake_hardware:=true`) so `/robot_description`, `/joint_states` and
+  `/controller_manager` exist.
+- A modern **browser** (WebGL2 + ES-module `importmap` support) for the
+  dashboard.
+- No extra Python packages: the node uses only `rclpy`, standard ROS 2
+  messages, `tf2_ros` and `ament_index_python`; the Three.js viewer is vendored
+  under `static/vendor/`.
+
+Build it in any colcon workspace and source the overlay:
+
+```bash
+cd ~/ros2_ws                       # your workspace
+colcon build --packages-select robot_control_test --symlink-install
+source install/setup.bash
+```
 
 ## Run
 
@@ -73,8 +106,31 @@ Open `http://localhost:8200`, pick a controller → **Engage** → jog it.
 | `max_joint_speed` | `0.5` | joint speed limit (rad/s) for JTC moves + FPC ramps |
 | `send_rate` | `100.0` | forward-position stream rate (Hz) |
 
-Defaults may also be set in a `robot_control_test:` section of the toolkit
-config (`robot_config.yaml`); CLI args override.
+These defaults are built into the launch file, so the package runs standalone
+anywhere. (Optionally, if a `cct_common` config package exposing `get_config()`
+is on the path, a `robot_control_test:` section there supplies the defaults
+instead; when it is absent the built-in values above are used.) CLI args always
+override.
+
+## ROS interfaces
+
+The node (`/robot_control_test`) uses only standard ros2_control topics and
+services — it defines **no custom messages**. Configurable names are shown with
+their default in parentheses.
+
+| direction | name | type | purpose |
+|---|---|---|---|
+| subscribe | `robot_description_topic` (`/robot_description`) | `std_msgs/String` | URDF → 3D model + joint limits |
+| subscribe | `joint_states_topic` (`/joint_states`) | `sensor_msgs/JointState` | live joint feedback |
+| TF | `base_frame` → each link, → `tip_frame` | tf2 | per-link poses for the 3D view + TCP triad |
+| service client | `<controller_manager>/list_controllers` | `controller_manager_msgs/ListControllers` | discover + classify controllers |
+| service client | `<controller_manager>/switch_controller` | `controller_manager_msgs/SwitchController` | engage / disengage (`BEST_EFFORT`) |
+| publish | `/<ctrl>/joint_trajectory` | `trajectory_msgs/JointTrajectory` | joint-trajectory moves |
+| publish | `/<ctrl>/commands` | `std_msgs/Float64MultiArray` | forward-position stream |
+| publish | `/<ctrl>/target_frame` | `geometry_msgs/PoseStamped` | Cartesian motion / compliance target |
+| publish | `/<ctrl>/target_wrench` | `geometry_msgs/WrenchStamped` | Cartesian force / compliance setpoint |
+
+The command publishers are created for the **engaged** controller only.
 
 ## Architecture
 
@@ -83,5 +139,26 @@ serving the dashboard, plus rclpy on a `MultiThreadedExecutor` with a
 `ReentrantCallbackGroup` so the synchronous `switch_controller` call issued from
 the HTTP handler thread never deadlocks the ROS spin. The web assets live in
 `robot_control_test/static/` (`index.html`, `dashboard.css`, `dashboard.js`, the
-Three.js `viewer.js`, and the vendored Three.js bundle). Port 8200 keeps it
-clear of the other toolkit dashboards (8080 / 8100 / 8120 / 8140 / 8160 / 8180).
+Three.js `viewer.js`, and the vendored Three.js bundle). The dashboard defaults
+to port 8200; override it with `dashboard_port` if something else already uses
+that port.
+
+### HTTP API
+
+The browser drives the node through a small JSON API on the same port, so you
+can script it from `curl` or another tool as well:
+
+| method + path | body | effect |
+|---|---|---|
+| `GET /api/state` | — | full snapshot: `have_model`, `links`, `link_tf`, `movable_joints`, `joint_values`, `js_age`, `tcp`, `controllers`, mesh flags |
+| `GET /mesh?pkg=<pkg>&path=<rel>` | — | mesh proxy: resolves `package://` via `ament_index_python`, serves STL / COLLADA |
+| `POST /api/engage`, `/api/disengage` | `{name}` | switch the active controller |
+| `POST /api/joint/set`, `/api/joint/jog` | `{positions}` / `{joint, delta}` | joint targets / single-joint nudge |
+| `POST /api/joint/sync`, `/api/joint/stop` | — | seed sliders from the current pose / hold |
+| `POST /api/cart/jog`, `/api/cart/reset` | `{axis, delta}` / — | Cartesian jog / reset to TCP |
+| `POST /api/wrench/set`, `/api/wrench/zero` | `{force, torque}` / — | target wrench / zero it |
+| `GET /`, `/vendor/*`, `*.css` `*.js` `*.html` | — | dashboard static assets |
+
+## License
+
+MIT — see the `<license>` tag in `package.xml`.

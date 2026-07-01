@@ -37,7 +37,9 @@
       <div class="vf-body" id="vf-body">
         <div class="vf-rows">
           <span>links</span><span class="num" id="n-links">—</span>
+          <span>joints</span><span class="num" id="n-joints">—</span>
           <span>selected</span><span class="num" id="sel-link">—</span>
+          <span>parent</span><span class="num" id="sel-parent">—</span>
         </div>
         <div class="vf-controls">
           <label><input type="checkbox" id="show-mesh" checked> <span id="mesh-lbl">mesh</span></label>
@@ -48,6 +50,11 @@
           <button id="fit" type="button" class="btn sm">Fit view</button>
         </div>
         <div class="vf-hint">drag to orbit · wheel to zoom · click a link to select</div>
+        <div class="vf-section jbhead">Joint angles
+          <span id="js-age" class="jbage"></span></div>
+        <div id="joint-bars" class="joint-bars">
+          <div class="muted sm">waiting for /joint_states…</div>
+        </div>
       </div>
     </div>
   </div>

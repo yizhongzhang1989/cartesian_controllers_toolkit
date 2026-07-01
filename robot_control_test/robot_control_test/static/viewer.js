@@ -22,12 +22,19 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { STLLoader } from "three/addons/loaders/STLLoader.js";
+import { ColladaLoader } from "three/addons/loaders/ColladaLoader.js";
 
 const $ = (id) => document.getElementById(id);
 
 const AUX_COLOR = 0xffb454;     // added aux frames (orange)
 const AUX_COLOR_CSS = "#ffb454";
 const BASE_COLOR = 0x34c3ff;    // pre-existing (launch-URDF) editable frames (cyan)
+
+// Per-joint colours for the live joint-angle bars (J1=blue, J2=green, J3=orange,
+// J4=red, J5=purple, J6=cyan; extra axes cycle) -- matches the other dashboards.
+const JOINT_COLORS = ["#42a5f5", "#66bb6a", "#ffa726",
+                      "#ef5350", "#ab47bc", "#26c6da"];
+const RAD2DEG = 180 / Math.PI;
 
 // ---- scene --------------------------------------------------------------
 const canvas = $("viewer");
@@ -60,8 +67,11 @@ const solidMat = new THREE.MeshStandardMaterial({ color: 0x9fb4c4, metalness: 0.
 const highlightMat = new THREE.MeshStandardMaterial({ color: AUX_COLOR, emissive: 0x6e3d00,
   emissiveIntensity: 0.6, metalness: 0.2, roughness: 0.5 });
 const stlLoader = new STLLoader();
-const geomCache = {};   // url -> {geom, waiting:[cb]}
-const meshItems = {};   // key(link#i) -> {link, local, solid}
+const colladaLoader = new ColladaLoader();
+// url -> {kind:"stl"|"dae", obj, ready, waiting:[cb]}; obj = BufferGeometry (STL)
+// or the loaded COLLADA scene Group (DAE). Loaded once per url, cloned per use.
+const protoCache = {};
+const meshItems = {};   // key(link#i) -> {link, local, solid, kind}
 const frameAxes = {};   // link -> AxesHelper
 const auxMarkers = {};  // aux link -> {group, line}
 const labelPool = [];   // reusable label divs (clustered, not per-link)
@@ -102,8 +112,8 @@ function applyMeshAvailability(has, unsupported) {
   opt.mesh = has;
   cb.title = has ? ""
     : unsupported
-      ? "this URDF's meshes aren't STL (e.g. COLLADA .dae) \u2014 this viewer "
-        + "renders STL only, so the skeleton is shown"
+      ? "this URDF's meshes aren't a supported format (STL/COLLADA) \u2014 "
+        + "the skeleton is shown"
       : "this URDF has no mesh visuals \u2014 skeleton view only";
   const lab = cb.closest("label");
   if (lab) lab.classList.toggle("opt-disabled", !has);
@@ -114,9 +124,23 @@ function applyMeshAvailability(has, unsupported) {
 
 // ---- selection ----------------------------------------------------------
 let selectedLink = "";
+function parentOf(link) {
+  // aux/editable frames carry their own parent; any other link's parent comes
+  // from the joint tree (child -> parent). "" for the root link / unknown.
+  if (editDefs[link] && editDefs[link].parent) return editDefs[link].parent;
+  const j = jointTree.find((x) => x.child === link);
+  return j ? j.parent : "";
+}
 function setSelected(link, notify) {
   selectedLink = link || "";
   if ($("sel-link")) $("sel-link").textContent = selectedLink || "—";
+  if ($("sel-parent")) {
+    $("sel-parent").textContent = (selectedLink && parentOf(selectedLink)) || "—";
+  }
+  // instant visual feedback (mesh highlight + thick selected frame) without
+  // waiting for the next poll cycle
+  const _tf = window.__lastLinkTf;
+  if (_tf) { placeCurrent(_tf); placeSelFrame(_tf); }
   if (notify && typeof window.__onPickLink === "function") {
     window.__onPickLink(selectedLink, !!editDefs[selectedLink],
                         editDefs[selectedLink] || null);
@@ -124,17 +148,32 @@ function setSelected(link, notify) {
 }
 window.__viewerSelect = (link) => setSelected(link, false);
 
-function getGeom(url, cb) {
-  const c = geomCache[url];
-  if (c && c.geom) { cb(c.geom); return; }
+// Mesh format is taken from the file extension. Direct URLs end in the ext
+// (.stl); the server's /mesh proxy carries it in a `path=` query param
+// (e.g. /mesh?pkg=ur_description&path=meshes/ur15/visual/base.dae).
+function meshExt(url) {
+  const m = /[?&]path=([^&]+)/.exec(url);
+  const p = m ? decodeURIComponent(m[1]) : url.split("?")[0];
+  const dot = p.lastIndexOf(".");
+  return dot >= 0 ? p.slice(dot + 1).toLowerCase() : "";
+}
+// Load a mesh url once (STL -> BufferGeometry, COLLADA -> scene Group) and
+// cache it; callers clone/instantiate per link. cb receives the cache entry.
+function loadProto(url, cb) {
+  const c = protoCache[url];
+  if (c && c.ready) { cb(c); return; }
   if (c) { c.waiting.push(cb); return; }
-  geomCache[url] = { geom: null, waiting: [cb] };
-  stlLoader.load(url, (g) => {
-    g.computeVertexNormals();
-    geomCache[url].geom = g;
-    geomCache[url].waiting.forEach((f) => f(g));
-    geomCache[url].waiting = [];
-  }, undefined, () => { /* load error: skeleton still shows */ });
+  const entry = protoCache[url] = { kind: meshExt(url), obj: null, ready: false, waiting: [cb] };
+  const done = (obj) => {
+    entry.obj = obj; entry.ready = true;
+    entry.waiting.forEach((f) => f(entry)); entry.waiting = [];
+  };
+  const fail = () => { entry.waiting = []; };   // load error: skeleton still shows
+  if (entry.kind === "dae") {
+    colladaLoader.load(url, (collada) => done(collada.scene), undefined, fail);
+  } else {
+    stlLoader.load(url, (g) => { g.computeVertexNormals(); done(g); }, undefined, fail);
+  }
 }
 function localMatrix(xyz, rpy, scale) {
   const m = new THREE.Matrix4();
@@ -152,12 +191,39 @@ function ensureMeshes(visuals) {
   visuals.forEach((v, i) => {
     const key = v.link + "#" + i;
     if (meshItems[key] !== undefined) return;
-    const item = { link: v.link, local: localMatrix(v.xyz, v.rpy, v.scale), solid: null };
+    const item = { link: v.link, local: localMatrix(v.xyz, v.rpy, v.scale),
+                   solid: null, kind: null, meshes: [] };
     meshItems[key] = item;
-    getGeom(v.url, (geom) => {
-      const s = new THREE.Mesh(geom, solidMat); s.matrixAutoUpdate = false;
-      s.userData.link = v.link;          // for raycast → link lookup
-      item.solid = s; scene.add(s);
+    loadProto(v.url, (entry) => {
+      let obj; const meshes = [];
+      if (entry.kind === "dae") {
+        // ColladaLoader rotates a Z_UP asset by -90deg about X to fit three's
+        // Y-up world (vertices are NOT converted). Our scene is ROS Z-up (we
+        // place link_tf directly) and the mesh vertices are authored Z-up to
+        // match the link frame, so we UNDO that up-axis tilt and place the
+        // clone via rosMat*local exactly like an STL. The COLLADA sub-meshes
+        // KEEP their native materials (e.g. the UR's grey body + blue joints);
+        // each mesh's base material is stashed so the selection highlight can
+        // swap to orange and back.
+        const inner = entry.obj.clone(true);
+        inner.rotation.set(0, 0, 0);
+        inner.updateMatrix();
+        inner.traverse((o) => {
+          if (o.isMesh) {
+            o.userData.link = v.link;
+            o.userData.baseMat = o.material;   // native COLLADA colour
+            meshes.push(o);
+          }
+        });
+        obj = new THREE.Group(); obj.add(inner);
+      } else {
+        obj = new THREE.Mesh(entry.obj, solidMat);
+        obj.userData.baseMat = solidMat;       // STL: neutral dashboard material
+        meshes.push(obj);
+      }
+      obj.matrixAutoUpdate = false;
+      obj.userData.link = v.link;          // for raycast → link lookup
+      item.kind = entry.kind; item.solid = obj; item.meshes = meshes; scene.add(obj);
     });
   });
 }
@@ -168,7 +234,11 @@ function placeCurrent(linkTf) {
     const hide = !lm || !opt.mesh || opt.auxOnly;   // aux-only hides robot meshes
     if (hide) { it.solid.visible = false; continue; }
     it.solid.visible = true;
-    it.solid.material = (it.link === selectedLink) ? highlightMat : solidMat;
+    // Selected link -> orange highlight; otherwise each mesh keeps its BASE
+    // material (native COLLADA colours for .dae, neutral grey for STL) so UR
+    // robots show their real colours while selection still highlights.
+    const sel = (it.link === selectedLink);
+    for (const m of it.meshes) m.material = sel ? highlightMat : m.userData.baseMat;
     it.solid.matrix.copy(rosMat(lm).multiply(it.local));
   }
 }
@@ -256,9 +326,43 @@ function ensureFrames(linkTf) {
 function placeFrames(linkTf) {
   for (const link in frameAxes) {
     const ax = frameAxes[link]; const lm = linkTf[link];
-    if (!lm || !opt.frames) { ax.visible = false; continue; }
+    // the selected link gets the THICK highlight frame instead of the thin one
+    if (!lm || !opt.frames || link === selectedLink) { ax.visible = false; continue; }
     ax.visible = true; ax.matrix.copy(rosMat(lm));
   }
+}
+
+// ---- selected-frame highlight (thick triad, shown only with frames) ------
+// When the per-link frames are displayed, the SELECTED link's frame is drawn as
+// a THICK RGB triad built from cylinders -- WebGL ignores line width, so this is
+// how a "wider line" frame is achieved -- and drawn on top (depthTest off). The
+// selected link's thin frame is hidden so only the wide one shows.
+let selFrame = null;
+function ensureSelFrame() {
+  if (selFrame) return selFrame;
+  const g = new THREE.Group();
+  g.matrixAutoUpdate = false; g.visible = false;
+  const LEN = 0.07, RAD = 0.006;
+  const axis = (hex, dir) => {
+    const geo = new THREE.CylinderGeometry(RAD, RAD, LEN, 14);
+    geo.translate(0, LEN / 2, 0);                 // base at origin, extends +Y
+    const mesh = new THREE.Mesh(geo,
+      new THREE.MeshBasicMaterial({ color: hex, depthTest: false }));
+    mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+    mesh.renderOrder = 999;
+    return mesh;
+  };
+  g.add(axis(0xff3b53, new THREE.Vector3(1, 0, 0)));  // X red
+  g.add(axis(0x39d353, new THREE.Vector3(0, 1, 0)));  // Y green
+  g.add(axis(0x3b82ff, new THREE.Vector3(0, 0, 1)));  // Z blue
+  scene.add(g); selFrame = g; return g;
+}
+function placeSelFrame(linkTf) {
+  const g = ensureSelFrame();
+  if (!opt.frames || !selectedLink || !linkTf || !linkTf[selectedLink]) {
+    g.visible = false; return;
+  }
+  g.visible = true; g.matrix.copy(rosMat(linkTf[selectedLink]));
 }
 
 // ---- per-link name labels (HTML overlay, clustered) ---------------------
@@ -398,16 +502,125 @@ canvas.addEventListener("pointerup", (e) => {
   const pick = [];
   for (const it of Object.values(meshItems)) if (it.solid && it.solid.visible) pick.push(it.solid);
   for (const m of Object.values(auxMarkers)) if (m.group.visible) pick.push(m.ball);
-  const hit = raycaster.intersectObjects(pick, false)[0];
-  if (hit && hit.object.userData.link) setSelected(hit.object.userData.link, true);
+  // recursive so COLLADA sub-meshes (children of the link Group) are hit too
+  const hit = raycaster.intersectObjects(pick, true)[0];
+  let o = hit ? hit.object : null;
+  while (o && !o.userData.link) o = o.parent;   // walk up to the link-tagged node
+  // click a link -> select it; click empty space -> deselect
+  setSelected(o && o.userData.link ? o.userData.link : "", true);
+});
+
+// Esc clears the selection too (ignored while typing in a form field).
+window.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape" || !selectedLink) return;
+  const t = document.activeElement;
+  if (t && /^(INPUT|SELECT|TEXTAREA)$/.test(t.tagName)) return;
+  setSelected("", true);
 });
 
 // Re-apply visibility/highlight to the static scene after a toggle change.
 function refreshStatic() {
   const tf = window.__lastLinkTf;
   if (!tf) return;
-  placeCurrent(tf); placeAux(tf); placeFrames(tf); placeLabels(tf);
+  placeCurrent(tf); placeAux(tf); placeFrames(tf); placeSelFrame(tf); placeLabels(tf);
   updateSkeleton(tf, !opt.mesh || opt.auxOnly || !window.__hasMeshes);
+}
+
+// ---- live joint-angle panel (read-only, in the 3D overlay) --------------
+// Mirrors the robot_web_viewer joint bars: one coloured bar per movable joint,
+// filled left/right of centre by the angle as a fraction of its (symmetric)
+// limit span, with the value in degrees (or mm for a prismatic joint). This is
+// purely a live readout -- the EDITABLE per-joint sliders live in the Joint
+// control card and only appear once a joint controller is engaged.
+
+// Depth-first link-chain order of the movable joints. Walks the kinematic tree
+// (joint_tree parent->child link edges, kept in URDF order) from each root link
+// (a link that is never a child), completing one branch fully before the next.
+// So a MULTI-ROBOT system lists one robot's joints, then the next, and a robot
+// with DIVERGING links finishes one sub-branch before the other. Fixed joints
+// are traversed (to reach movable joints beyond them) but not listed.
+function chainJointOrder(jointTree, movable) {
+  const movableNames = (movable || []).map((m) => m.name);
+  if (!jointTree || !jointTree.length) return movableNames;
+  const movableSet = new Set(movableNames);
+  const childJoints = {};       // parent link -> [joint, ...] in URDF order
+  const childLinks = new Set();
+  const links = new Set();
+  for (const j of jointTree) {
+    (childJoints[j.parent] = childJoints[j.parent] || []).push(j);
+    childLinks.add(j.child);
+    links.add(j.parent); links.add(j.child);
+  }
+  // roots = links that are never a joint child (>1 => several robots)
+  const roots = [...links].filter((l) => !childLinks.has(l));
+  const order = [];
+  const seen = new Set();
+  const visit = (link) => {
+    if (seen.has(link)) return;          // guard against a malformed cycle
+    seen.add(link);
+    for (const j of (childJoints[link] || [])) {
+      if (movableSet.has(j.name)) order.push(j.name);
+      visit(j.child);                    // depth-first: finish this branch first
+    }
+  };
+  for (const r of roots) visit(r);
+  // append any movable joints not reached from a root (disconnected URDF)
+  for (const n of movableNames) if (!order.includes(n)) order.push(n);
+  return order;
+}
+
+const jbRowEls = {};
+function buildJointBars(names) {
+  const host = $("joint-bars"); if (!host) return;
+  const sig = names.join(",");
+  if (host.dataset.sig === sig) return;   // rebuild only when the joint set changes
+  host.dataset.sig = sig;
+  host.innerHTML = "";
+  for (const k in jbRowEls) delete jbRowEls[k];
+  names.forEach((name, i) => {
+    const color = JOINT_COLORS[i % JOINT_COLORS.length];
+    const row = document.createElement("div"); row.className = "jbrow";
+    row.innerHTML =
+      `<span class="jblabel" style="color:${color}" title="${name}">${name}</span>`
+      + `<span class="jbbg"><span class="jbcenter"></span>`
+      + `<span class="jbbar"></span></span>`
+      + `<span class="jbval">\u2014</span>`;
+    host.appendChild(row);
+    jbRowEls[name] = { bar: row.querySelector(".jbbar"),
+                       val: row.querySelector(".jbval"), color };
+  });
+}
+// Order comes from the caller (kinematic link-chain, see chainJointOrder); the
+// joint names are the real URDF names (which match the /joint_states topic).
+// limits/type are looked up from the URDF movable-joint metadata (by name), and
+// the live angle from joint_values.
+function updateJointBars(names, movable, values) {
+  const host = $("joint-bars"); if (!host) return;
+  if (!names || !names.length) {
+    host.innerHTML = '<div class="muted sm">waiting for /joint_states…</div>';
+    host.dataset.sig = ""; return;
+  }
+  const meta = {};
+  for (const m of (movable || [])) meta[m.name] = m;
+  buildJointBars(names);
+  for (const name of names) {
+    const row = jbRowEls[name]; if (!row) continue;
+    const m = meta[name] || {};
+    const ang = m.type !== "prismatic";
+    const v = Number((values && values[name]) ?? 0);
+    let span = ang ? Math.PI : 0.5;
+    if (m.lower != null && m.upper != null) {
+      span = Math.max(Math.abs(m.lower), Math.abs(m.upper)) || span;
+    }
+    const frac = Math.max(-1, Math.min(1, v / span));
+    const b = row.bar;
+    b.style.background = row.color;
+    if (frac >= 0) { b.style.left = "50%"; b.style.right = ""; }
+    else { b.style.right = "50%"; b.style.left = ""; }
+    b.style.width = (Math.abs(frac) * 50).toFixed(1) + "%";
+    row.val.textContent = ang ? (v * RAD2DEG).toFixed(1) + "\u00b0"
+                              : (v * 1000).toFixed(0) + " mm";
+  }
 }
 
 // ---- poll ---------------------------------------------------------------
@@ -428,7 +641,7 @@ async function poll() {
     jointTree = s.joint_tree || [];
     if (s.has_meshes) ensureMeshes(s.visuals || []);
     ensureFrames(tf);
-    placeCurrent(tf); placeAux(tf); placeFrames(tf); placeLabels(tf);
+    placeCurrent(tf); placeAux(tf); placeFrames(tf); placeSelFrame(tf); placeLabels(tf);
     updateSkeleton(tf, !opt.mesh || opt.auxOnly || !s.has_meshes);
     fitView(tf);
     window.__lastLinkTf = tf;
@@ -441,8 +654,21 @@ async function poll() {
       $("model-pill").textContent = s.has_meshes ? "meshes" : "skeleton";
       $("model-pill").className = "pill pill-good";
     }
+    // Joint-angle panel order = kinematic link-chain, depth-first: complete one
+    // branch/robot fully before the next (handles multi-robot systems and
+    // diverging links). Names are the real joint names (matching /joint_states);
+    // values come from joint_values.
+    const jOrder = chainJointOrder(jointTree, s.movable_joints || []);
+    if ($("n-joints")) $("n-joints").textContent = jOrder.length || "\u2014";
+    updateJointBars(jOrder, s.movable_joints || [], s.joint_values || {});
+    if ($("js-age")) {
+      const a = s.js_age;
+      $("js-age").textContent = (a == null) ? "" : a.toFixed(1) + "s";
+      $("js-age").classList.toggle("stale", a != null && a > 1.0);
+    }
   } else {
     if ($("model-pill")) { $("model-pill").textContent = "no model"; $("model-pill").className = "pill"; }
+    updateJointBars([], [], {});
   }
   // hand the snapshot to the test-interface script
   if (typeof window.__onSnapshot === "function") window.__onSnapshot(s);

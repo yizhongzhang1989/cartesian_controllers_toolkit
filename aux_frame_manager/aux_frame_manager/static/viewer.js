@@ -17,6 +17,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { STLLoader } from "three/addons/loaders/STLLoader.js";
+import { ColladaLoader } from "three/addons/loaders/ColladaLoader.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -53,8 +54,11 @@ const solidMat = new THREE.MeshStandardMaterial({ color: 0x9fb4c4, metalness: 0.
 const highlightMat = new THREE.MeshStandardMaterial({ color: AUX_COLOR, emissive: 0x6e3d00,
   emissiveIntensity: 0.6, metalness: 0.2, roughness: 0.5 });
 const stlLoader = new STLLoader();
-const geomCache = {};   // url -> {geom, waiting:[cb]}
-const meshItems = {};   // key(link#i) -> {link, local, solid}
+const colladaLoader = new ColladaLoader();
+// url -> {kind:"stl"|"dae", obj, ready, waiting:[cb]}; obj = STL BufferGeometry
+// or the loaded COLLADA scene Group. Loaded once per url, cloned per use.
+const protoCache = {};
+const meshItems = {};   // key(link#i) -> {link, local, solid, kind, meshes}
 const frameAxes = {};   // link -> AxesHelper
 const auxMarkers = {};  // aux link -> {group, line}
 const labelPool = [];   // reusable label divs (clustered, not per-link)
@@ -95,6 +99,7 @@ function setSelected(link, notify) {
     $("sel-parent").textContent = p ? " ← " + p : "";
   }
   if (window.__lastLinkTf) placeSelection(window.__lastLinkTf);   // instant highlight
+  invalidate();
   if (notify && typeof window.__onPickLink === "function") {
     window.__onPickLink(selectedLink, !!editDefs[selectedLink],
                         editDefs[selectedLink] || null);
@@ -102,17 +107,26 @@ function setSelected(link, notify) {
 }
 window.__viewerSelect = (link) => setSelected(link, false);
 
-function getGeom(url, cb) {
-  const c = geomCache[url];
-  if (c && c.geom) { cb(c.geom); return; }
+// Mesh format from the file extension (direct .stl URLs, or the /mesh proxy's
+// ?path= query for .dae). STL -> BufferGeometry, COLLADA -> scene Group.
+function meshExt(url) {
+  const m = /[?&]path=([^&]+)/.exec(url);
+  const p = m ? decodeURIComponent(m[1]) : url.split("?")[0];
+  const dot = p.lastIndexOf(".");
+  return dot >= 0 ? p.slice(dot + 1).toLowerCase() : "";
+}
+function loadProto(url, cb) {
+  const c = protoCache[url];
+  if (c && c.ready) { cb(c); return; }
   if (c) { c.waiting.push(cb); return; }
-  geomCache[url] = { geom: null, waiting: [cb] };
-  stlLoader.load(url, (g) => {
-    g.computeVertexNormals();
-    geomCache[url].geom = g;
-    geomCache[url].waiting.forEach((f) => f(g));
-    geomCache[url].waiting = [];
-  }, undefined, () => { /* load error: skeleton still shows */ });
+  const entry = protoCache[url] = { kind: meshExt(url), obj: null, ready: false, waiting: [cb] };
+  const done = (obj) => { entry.obj = obj; entry.ready = true; entry.waiting.forEach((f) => f(entry)); entry.waiting = []; };
+  const fail = () => { entry.waiting = []; };   // load error: skeleton still shows
+  if (entry.kind === "dae") {
+    colladaLoader.load(url, (collada) => done(collada.scene), undefined, fail);
+  } else {
+    stlLoader.load(url, (g) => { g.computeVertexNormals(); done(g); }, undefined, fail);
+  }
 }
 function localMatrix(xyz, rpy, scale) {
   const m = new THREE.Matrix4();
@@ -126,16 +140,94 @@ function rosMat(a) {
     a[0][0], a[0][1], a[0][2], a[0][3], a[1][0], a[1][1], a[1][2], a[1][3],
     a[2][0], a[2][1], a[2][2], a[2][3], a[3][0], a[3][1], a[3][2], a[3][3]);
 }
+
+// ---- pose smoothing + on-demand rendering (ported from robot_test_dashboard)
+// Each poll sets a TARGET pose; the render loop eases the DISPLAYED pose toward
+// it every frame (pos lerp + quat slerp) so motion is smooth, and only draws
+// when something changed (robot easing, camera moving, or invalidate()), so an
+// idle canvas is nearly free.
+const SMOOTH_TAU = 0.06, POS_EPS = 1e-4, ANG_EPS = 5e-4;
+const _ONE = new THREE.Vector3(1, 1, 1);
+const _dm = new THREE.Matrix4(), _cm = new THREE.Matrix4(), _hm = new THREE.Matrix4();
+const _dp = new THREE.Vector3(), _dq = new THREE.Quaternion(), _dsc = new THREE.Vector3();
+let targetPose = {};
+const dispPose = {}, dispTf = {};
+window.__lastLinkTf = dispTf;          // everything reads the live, smoothed pose
+let needsRender = true;
+function invalidate() { needsRender = true; }
+THREE.DefaultLoadingManager.onLoad = invalidate;
+function rosMatInto(m, a) {
+  return m.set(
+    a[0][0], a[0][1], a[0][2], a[0][3], a[1][0], a[1][1], a[1][2], a[1][3],
+    a[2][0], a[2][1], a[2][2], a[2][3], a[3][0], a[3][1], a[3][2], a[3][3]);
+}
+function writeDispArray(link, pos, quat) {
+  _cm.compose(pos, quat, _ONE);
+  const e = _cm.elements;
+  let a = dispTf[link];
+  if (!a) a = dispTf[link] = [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 1]];
+  a[0][0] = e[0]; a[0][1] = e[4]; a[0][2] = e[8];  a[0][3] = e[12];
+  a[1][0] = e[1]; a[1][1] = e[5]; a[1][2] = e[9];  a[1][3] = e[13];
+  a[2][0] = e[2]; a[2][1] = e[6]; a[2][2] = e[10]; a[2][3] = e[14];
+}
+function setTargetPose(linkTf) {
+  const next = {}; let changed = false;
+  for (const link in (linkTf || {})) {
+    rosMatInto(_dm, linkTf[link]); _dm.decompose(_dp, _dq, _dsc);
+    next[link] = { pos: _dp.clone(), quat: _dq.clone() };
+    if (!dispPose[link]) { dispPose[link] = { pos: _dp.clone(), quat: _dq.clone() }; writeDispArray(link, _dp, _dq); changed = true; }
+  }
+  for (const link in dispPose) if (!next[link]) { delete dispPose[link]; delete dispTf[link]; changed = true; }
+  targetPose = next;
+  if (changed) invalidate();
+}
+function advanceInterp(dt) {
+  const alpha = 1 - Math.exp(-dt / SMOOTH_TAU); let moving = false;
+  for (const link in targetPose) {
+    const t = targetPose[link];
+    let d = dispPose[link] || (dispPose[link] = { pos: t.pos.clone(), quat: t.quat.clone() });
+    if (d.pos.distanceTo(t.pos) < POS_EPS && d.quat.angleTo(t.quat) < ANG_EPS) continue;
+    d.pos.lerp(t.pos, alpha); d.quat.slerp(t.quat, alpha);
+    writeDispArray(link, d.pos, d.quat); moving = true;
+  }
+  return moving;
+}
+// Place all pose-dependent geometry at the smoothed pose (labels are placed
+// separately since they also move when only the camera moves).
+function placeGeometry(tf) {
+  placeCurrent(tf); placeAux(tf); placeFrames(tf); placeSelection(tf);
+  updateSkeleton(tf, !opt.mesh || opt.auxOnly || !window.__hasMeshes);
+}
+
 function ensureMeshes(visuals) {
   visuals.forEach((v, i) => {
     const key = v.link + "#" + i;
     if (meshItems[key] !== undefined) return;
-    const item = { link: v.link, local: localMatrix(v.xyz, v.rpy, v.scale), solid: null };
+    const item = { link: v.link, local: localMatrix(v.xyz, v.rpy, v.scale), solid: null, kind: null, meshes: [] };
     meshItems[key] = item;
-    getGeom(v.url, (geom) => {
-      const s = new THREE.Mesh(geom, solidMat); s.matrixAutoUpdate = false;
-      s.userData.link = v.link;          // for raycast → link lookup
-      item.solid = s; scene.add(s);
+    loadProto(v.url, (entry) => {
+      let obj; const meshes = [];
+      if (entry.kind === "dae") {
+        // ColladaLoader tilts a Z_UP asset -90deg about X to fit three's Y-up
+        // world; our scene is ROS Z-up and the vertices are authored Z-up, so
+        // UNDO that tilt and place via rosMat*local like an STL. COLLADA meshes
+        // KEEP their native materials; each mesh's base material is stashed so
+        // the selection highlight can swap to orange and back.
+        const inner = entry.obj.clone(true);
+        inner.rotation.set(0, 0, 0); inner.updateMatrix();
+        inner.traverse((o) => {
+          if (o.isMesh) { o.userData.link = v.link; o.userData.baseMat = o.material; meshes.push(o); }
+        });
+        obj = new THREE.Group(); obj.add(inner);
+      } else {
+        obj = new THREE.Mesh(entry.obj, solidMat);
+        obj.userData.baseMat = solidMat;
+        meshes.push(obj);
+      }
+      obj.matrixAutoUpdate = false;
+      obj.userData.link = v.link;          // for raycast → link lookup
+      item.kind = entry.kind; item.solid = obj; item.meshes = meshes; scene.add(obj);
+      invalidate();
     });
   });
 }
@@ -144,10 +236,16 @@ function placeCurrent(linkTf) {
     const it = meshItems[key]; if (!it.solid) continue;
     const lm = linkTf[it.link];
     const hide = !lm || !opt.mesh || opt.auxOnly;   // aux-only hides robot meshes
-    if (hide) { it.solid.visible = false; continue; }
+    if (hide) { if (it.solid.visible) it.solid.visible = false; continue; }
     it.solid.visible = true;
-    it.solid.material = (it.link === selectedLink) ? highlightMat : solidMat;
-    it.solid.matrix.copy(rosMat(lm).multiply(it.local));
+    // selected link -> orange highlight; else each mesh keeps its BASE material
+    // (native COLLADA colours for .dae, neutral grey for STL).
+    const hi = (it.link === selectedLink);
+    for (const m of it.meshes) {
+      const mat = hi ? highlightMat : m.userData.baseMat;
+      if (m.material !== mat) m.material = mat;
+    }
+    it.solid.matrix.multiplyMatrices(rosMatInto(_hm, lm), it.local);
   }
 }
 
@@ -234,8 +332,8 @@ function ensureFrames(linkTf) {
 function placeFrames(linkTf) {
   for (const link in frameAxes) {
     const ax = frameAxes[link]; const lm = linkTf[link];
-    if (!lm || !opt.frames) { ax.visible = false; continue; }
-    ax.visible = true; ax.matrix.copy(rosMat(lm));
+    if (!lm || !opt.frames) { if (ax.visible) ax.visible = false; continue; }
+    ax.visible = true; rosMatInto(ax.matrix, lm);
   }
 }
 
@@ -393,6 +491,7 @@ function resetView(linkTf) {
   const sz = box.getSize(new THREE.Vector3()).length() || 1.0;
   controls.target.copy(c);
   camera.position.set(c.x + sz, c.y - sz, c.z + sz * 0.7); controls.update();
+  invalidate();
 }
 function fitView(linkTf) {
   if (didFit) return;
@@ -417,9 +516,11 @@ canvas.addEventListener("pointerup", (e) => {
   const pick = [];
   for (const it of Object.values(meshItems)) if (it.solid && it.solid.visible) pick.push(it.solid);
   for (const m of Object.values(auxMarkers)) if (m.group.visible) pick.push(m.ball);
-  const hit = raycaster.intersectObjects(pick, false)[0];
-  if (hit && hit.object.userData.link) setSelected(hit.object.userData.link, true);
-  else setSelected("", true);                  // clicked empty space -> deselect
+  // recursive so COLLADA sub-meshes (children of the link Group) are hit too
+  const hit = raycaster.intersectObjects(pick, true)[0];
+  let o = hit ? hit.object : null;
+  while (o && !o.userData.link) o = o.parent;   // walk up to the link-tagged node
+  setSelected(o && o.userData.link ? o.userData.link : "", true);
 });
 
 // Esc also clears the current selection (but don't steal it from form fields).
@@ -431,12 +532,7 @@ window.addEventListener("keydown", (e) => {
 });
 
 // Re-apply visibility/highlight to the static scene after a toggle change.
-function refreshStatic() {
-  const tf = window.__lastLinkTf;
-  if (!tf) return;
-  placeCurrent(tf); placeAux(tf); placeFrames(tf); placeLabels(tf);
-  updateSkeleton(tf, !opt.mesh || opt.auxOnly || !window.__hasMeshes);
-}
+function refreshStatic() { invalidate(); }   // the render loop re-places everything
 
 // ---- poll ---------------------------------------------------------------
 async function poll() {
@@ -455,10 +551,13 @@ async function poll() {
     jointTree = s.joint_tree || [];
     if (s.has_meshes) ensureMeshes(s.visuals || []);
     ensureFrames(tf);
-    placeCurrent(tf); placeAux(tf); placeFrames(tf); placeSelection(tf); placeLabels(tf);
-    updateSkeleton(tf, !opt.mesh || opt.auxOnly || !s.has_meshes);
+    setTargetPose(tf);      // feed the smoother; the render loop eases + places it
     fitView(tf);
-    window.__lastLinkTf = tf;
+    // an aux/editable-frame edit (or a changed mesh set) redraws even if no link moved
+    const sig = JSON.stringify([s.aux_links,
+      (s.editable_frames || s.aux_frames || []).map((f) => [f.name, f.parent, f.source, f.xyz, f.rpy]),
+      (s.visuals || []).map((v) => v.link)]);
+    if (sig !== window.__auxSig) { window.__auxSig = sig; invalidate(); }
     if ($("n-links")) $("n-links").textContent = (s.links || []).length || "—";
     if ($("n-aux")) $("n-aux").textContent = (s.aux_links || []).length || 0;
     if ($("model-pill")) {
@@ -480,8 +579,10 @@ if ($("vf-collapse")) $("vf-collapse").onclick = () => {
 };
 poll(); setInterval(poll, 200);
 
-// ---- render loop --------------------------------------------------------
-function resizeToDisplay() {
+// ---- render loop (on-demand) --------------------------------------------
+let _pendingResize = true;
+function applyResize() {
+  _pendingResize = false;
   const w = canvas.clientWidth, h = canvas.clientHeight;
   if (!w || !h) return;
   const pr = renderer.getPixelRatio();
@@ -490,8 +591,20 @@ function resizeToDisplay() {
     camera.aspect = w / h; camera.updateProjectionMatrix();
   }
 }
-(function animate() {
+new ResizeObserver(() => { _pendingResize = true; invalidate(); }).observe(canvas);
+let _prevT = performance.now();
+(function animate(now) {
   requestAnimationFrame(animate);
-  resizeToDisplay(); controls.update(); renderer.render(scene, camera);
-  if (window.__lastLinkTf) placeLabels(window.__lastLinkTf);
+  const t = now || performance.now();
+  const dt = Math.min(0.1, Math.max(0, (t - _prevT) * 0.001)); _prevT = t;
+  if (_pendingResize) applyResize();
+  const moving = advanceInterp(dt);
+  const camMoved = controls.update();
+  const geomDirty = moving || needsRender;
+  if (geomDirty || camMoved) {
+    if (geomDirty) placeGeometry(dispTf);
+    placeLabels(dispTf);
+    renderer.render(scene, camera);
+    needsRender = false;
+  }
 })();
