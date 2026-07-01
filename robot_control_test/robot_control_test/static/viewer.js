@@ -502,8 +502,20 @@ canvas.addEventListener("pointerup", (e) => {
   const pick = [];
   for (const it of Object.values(meshItems)) if (it.solid && it.solid.visible) pick.push(it.solid);
   for (const m of Object.values(auxMarkers)) if (m.group.visible) pick.push(m.ball);
-  const hit = raycaster.intersectObjects(pick, false)[0];
-  if (hit && hit.object.userData.link) setSelected(hit.object.userData.link, true);
+  // recursive so COLLADA sub-meshes (children of the link Group) are hit too
+  const hit = raycaster.intersectObjects(pick, true)[0];
+  let o = hit ? hit.object : null;
+  while (o && !o.userData.link) o = o.parent;   // walk up to the link-tagged node
+  // click a link -> select it; click empty space -> deselect
+  setSelected(o && o.userData.link ? o.userData.link : "", true);
+});
+
+// Esc clears the selection too (ignored while typing in a form field).
+window.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape" || !selectedLink) return;
+  const t = document.activeElement;
+  if (t && /^(INPUT|SELECT|TEXTAREA)$/.test(t.tagName)) return;
+  setSelected("", true);
 });
 
 // Re-apply visibility/highlight to the static scene after a toggle change.
