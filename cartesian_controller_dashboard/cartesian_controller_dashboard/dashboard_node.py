@@ -284,17 +284,18 @@ _TARGET_WRENCH_NAMES = {n for (n, _l, _k) in _TARGET_WRENCH_PARAMS}
 # ---------------------------------------------------------------------------
 # wrench dead-zone editable from the dashboard.
 #
-# These parameters live on the ``ft_sensor_gravity_compensation`` node
-# (see :module:`ft_sensor_gravity_compensation.compensation_node`) and
-# are applied to the *compensated* wrench (after gravity + bias
-# subtraction, before publishing).  Per-axis soft (continuous) shrinkage
-# so the downstream cartesian-force / compliance controller does not
-# see a step change at the dead-zone boundary.
+# These parameters live on the orchestrator (``cartesian_control_manager``),
+# which applies them to the relayed wrench just before forwarding it to the
+# FZI controllers (see ``CartesianControlNode._apply_wrench_deadband``).
+# Per-axis soft (continuous) shrinkage so the downstream cartesian-force /
+# compliance controller does not see a step change at the dead-zone boundary.
+# Living on the always-present orchestrator makes the deadband available on
+# every robot, regardless of how the compensated wrench is produced.
 #
-# Each entry is ``(param_name, ui_label, unit_label)``.  All four are
-# 3-element ``double[]`` arrays of N (force) or Nm (torque); validation
-# (length 3, finite, >= 0) is done both here and in the gravity-comp
-# node's on-set-parameters callback.
+# Each entry is ``(param_name, ui_label, unit_label)``.  Both are 3-element
+# ``double[]`` arrays of N (force) or Nm (torque); validation (length 3,
+# finite, >= 0) is done both here and in the orchestrator's
+# on-set-parameters callback.
 _WRENCH_DEADBAND_PARAMS: List[Tuple[str, str, str]] = [
     # (param_name, ui_label, unit_label)
     ("force_deadband",  "force",  "N"),
@@ -607,12 +608,6 @@ class DashboardNode(Node):
         ("default_controller_name",  "cartesian_force_controller"),
         ("wrench_topic",     "/ft_sensor/wrench_compensated"),
         ("joint_states_topic", "/joint_states"),
-        # Fully-qualified name (relative to root, with leading slash) of
-        # the gravity-compensation node whose ``force_deadband`` /
-        # ``torque_deadband`` parameters the dashboard's "Wrench
-        # deadband" editor targets.  Default matches the node name used
-        # by ``ft_sensor_gravity_compensation.compensation_node``.
-        ("gravity_compensation_node", "/ft_sensor_gravity_compensation"),
         # Frames used for jog / snap-target publishes on motion +
         # compliance controllers AND for the TCP-pose display.  These
         # are FALLBACK values used only when the active controller's
@@ -657,6 +652,11 @@ class DashboardNode(Node):
             str(n).strip("/") for n in avail if str(n).strip("/")]
         if not self._available_controllers:
             self._available_controllers = ["cartesian_force_controller"]
+        # Kind ("force"/"motion"/"compliance") per controller node name,
+        # learned from the orchestrator's state topic at runtime (see
+        # ``_sync_controllers_from_state``).  Empty until the first state
+        # message; ``_active_kind`` falls back to scanning the raw state.
+        self._kind_by_name: Dict[str, str] = {}
         # Bootstrap default until orchestrator state arrives.  The cached
         # state's ``active_controller`` field overrides this at runtime.
         self._default_controller_name = str(
@@ -665,9 +665,6 @@ class DashboardNode(Node):
             self._default_controller_name = self._available_controllers[0]
         self._wrench_topic = str(gp("wrench_topic"))
         self._joint_states_topic = str(gp("joint_states_topic"))
-        self._gravcomp_ns = str(gp("gravity_compensation_node")).rstrip("/")
-        if not self._gravcomp_ns.startswith("/"):
-            self._gravcomp_ns = "/" + self._gravcomp_ns
         self._base_frame = str(gp("base_frame")).strip("/")
         self._tool_frame = str(gp("tool_frame")).strip("/")
         self._service_timeout = float(gp("service_timeout_sec"))
@@ -803,20 +800,6 @@ class DashboardNode(Node):
             f"{self._orchestrator_ns}/get_parameters",
             callback_group=self._cbgroup)
 
-        # Service clients for the gravity-compensation node's parameters.
-        # Used by the "Wrench deadband" editor to read the current
-        # per-axis force / torque dead-zone (GetParameters) and to push
-        # operator edits (SetParameters).  If the node is not running
-        # the dashboard surfaces a clear timeout on both paths.
-        self._cli_gravcomp_get_params = self.create_client(
-            GetParameters,
-            f"{self._gravcomp_ns}/get_parameters",
-            callback_group=self._cbgroup)
-        self._cli_gravcomp_set_params = self.create_client(
-            SetParameters,
-            f"{self._gravcomp_ns}/set_parameters",
-            callback_group=self._cbgroup)
-
         # Service client for ``robot_state_publisher``'s parameters.
         # Used by the "Tool frames" editor to push an updated
         # ``robot_description`` URDF when the operator saves aux-frame
@@ -903,7 +886,72 @@ class DashboardNode(Node):
         with self._lock:
             self._control_state = payload
             self._control_state_mono = time.monotonic()
+        # Adopt whatever controller catalogue the orchestrator reports (the
+        # actual, possibly instance-suffixed, node names) so parameter and
+        # target-frame plumbing targets the real controllers -- universal
+        # across robots / naming conventions.
+        self._sync_controllers_from_state(payload.get("available_controllers"))
         self._state_rate.tick()
+
+    def _sync_controllers_from_state(self, entries: Any) -> None:
+        """Adopt the controller catalogue published by the orchestrator.
+
+        The orchestrator reports the ACTUAL controller node names (which may
+        be instance-suffixed, e.g. ``cartesian_force_controller_right``) and
+        their kinds.  For any newly-seen name we create parameter clients and
+        a ``target_frame`` publisher, so parameter reads/writes, the
+        active-controller switch, and jog/snap all target whatever the
+        orchestrator actually runs.  No hard-coded naming assumption -> the
+        dashboard adapts to any robot / instance automatically.
+
+        Runs on the (mutually-exclusive) state-subscription callback, i.e.
+        the executor thread, so the newly-created entities are picked up on
+        the executor's next wait cycle; ``_lock`` guards the shared maps
+        against concurrent HTTP-thread reads.
+        """
+        if not isinstance(entries, list):
+            return
+        names: List[str] = []
+        kinds: Dict[str, str] = {}
+        for e in entries:
+            if not isinstance(e, dict):
+                continue
+            n = e.get("name")
+            if not isinstance(n, str) or not n.strip("/"):
+                continue
+            nm = n.strip("/")
+            names.append(nm)
+            k = e.get("kind")
+            if isinstance(k, str) and k:
+                kinds[nm] = k
+        if not names:
+            return
+        with self._lock:
+            if names == self._available_controllers and kinds == self._kind_by_name:
+                return  # unchanged -> nothing to (re)create
+            self._available_controllers = names
+            self._kind_by_name = kinds
+            if self._default_controller_name not in names:
+                self._default_controller_name = names[0]
+            for ctrl in names:
+                if ctrl not in self._param_clients:
+                    self._param_clients[ctrl] = {
+                        "list": self.create_client(
+                            ListParameters, f"/{ctrl}/list_parameters",
+                            callback_group=self._cbgroup),
+                        "get": self.create_client(
+                            GetParameters, f"/{ctrl}/get_parameters",
+                            callback_group=self._cbgroup),
+                        "set": self.create_client(
+                            SetParameters, f"/{ctrl}/set_parameters",
+                            callback_group=self._cbgroup),
+                    }
+                if ctrl not in self._target_frame_pubs:
+                    self._target_frame_pubs[ctrl] = self.create_publisher(
+                        PoseStamped, f"/{ctrl}/target_frame", 10)
+        self.get_logger().info(
+            f"adopted controller catalogue from orchestrator "
+            f"{self._orchestrator_ns!r}: {names}")
 
     def _on_wrench(self, msg: WrenchStamped) -> None:
         mono = time.monotonic()
@@ -1280,7 +1328,11 @@ class DashboardNode(Node):
         """
         active = self._active_controller()
         with self._lock:
+            k = self._kind_by_name.get(active)
             ctl = self._control_state or {}
+        if isinstance(k, str) and k:
+            return k
+        # Fallback: scan the raw state (e.g. before the catalogue sync ran).
         for entry in ctl.get("available_controllers", []) or []:
             if (isinstance(entry, dict)
                     and entry.get("name") == active
@@ -1699,42 +1751,40 @@ class DashboardNode(Node):
         }
 
     # ------------------------------------------------------------------
-    # wrench dead-zone editor (gravity-compensation node parameters)
+    # wrench dead-zone editor (orchestrator parameters)
     # ------------------------------------------------------------------
-    # The dead-zone is per-axis soft (continuous) shrinkage applied to
-    # the compensated wrench just before it is published.  It lives on
-    # the gravity-compensation node so that every downstream consumer
-    # (the force / compliance controllers, the dashboard's live wrench
-    # display, rosbag recorders) sees the same clean signal.  See
-    # ``ft_sensor_gravity_compensation.compensation_node`` for the
-    # validation rules: 3 doubles per parameter, non-negative, finite.
-    def _get_gravcomp_double_arrays(self, names: List[str]
-                                    ) -> Dict[str, Optional[List[float]]]:
-        """Read ``double[]`` parameters from the gravity-comp node.
+    # The dead-zone is a per-axis soft (continuous) shrinkage applied to the
+    # relayed wrench inside the orchestrator (the universal wrench relay --
+    # see ``CartesianControlNode._apply_wrench_deadband``) just before it is
+    # forwarded to the FZI force / compliance controllers.  Targeting the
+    # orchestrator (always present) rather than an optional upstream
+    # gravity-compensation node makes the deadband editor work on every
+    # robot, regardless of how the compensated wrench is produced.  Each
+    # parameter is a 3-element ``double[]`` of N (force) or Nm (torque);
+    # validation (length 3, finite, >= 0) is done both here and in the
+    # orchestrator's on-set-parameters callback.
+    def _get_double_arrays(self, get_cli, names: List[str]
+                           ) -> Dict[str, Optional[List[float]]]:
+        """Read ``double[]`` parameters from a node via ``get_cli``.
 
-        Returns ``{name: list_or_None}``.  ``None`` means the parameter
-        is not declared on the remote node OR the service is not
-        reachable inside ``_service_timeout``.  Callers are responsible
-        for distinguishing those two cases via ``service_available``
-        in the caller's response payload if needed.
+        Returns ``{name: list_or_None}``.  ``None`` means the parameter is
+        not declared on the remote node OR the service is not reachable
+        inside ``_service_timeout``.
         """
         result: Dict[str, Optional[List[float]]] = {n: None for n in names}
         if not names:
             return result
-        if not self._cli_gravcomp_get_params.wait_for_service(
-                timeout_sec=0.2):
+        if not get_cli.wait_for_service(timeout_sec=0.2):
             return result
         req = GetParameters.Request()
         req.names = list(names)
-        resp = self._service_call_sync(
-            self._cli_gravcomp_get_params, req, self._service_timeout)
+        resp = self._service_call_sync(get_cli, req, self._service_timeout)
         if resp is None:
             return result
         for name, pv in zip(names, resp.values):
             decoded = _decode_param_value(pv)
-            # We only accept double-array values for these parameters
-            # (anything else means the node has a name collision with a
-            # differently-typed parameter -- treat as "not available").
+            # Accept only double-array values (anything else means a name
+            # collision with a differently-typed parameter -> "not available").
             if isinstance(decoded, list) and all(
                     isinstance(v, (int, float)) for v in decoded):
                 result[name] = [float(v) for v in decoded]
@@ -1742,22 +1792,21 @@ class DashboardNode(Node):
                 result[name] = None
         return result
 
-    def _set_gravcomp_double_arrays(self, updates: Dict[str, List[float]]
-                                    ) -> Tuple[bool, List[Dict[str, Any]]]:
-        """Push a batch of ``double[]`` parameters to the gravity-comp node.
+    def _set_double_arrays(self, set_cli, updates: Dict[str, List[float]],
+                           node_label: str
+                           ) -> Tuple[bool, List[Dict[str, Any]]]:
+        """Push a batch of ``double[]`` parameters to a node via ``set_cli``.
 
         Returns ``(ok, per_param_results)`` matching
-        ``_set_orchestrator_doubles`` in shape.  Used by the
-        wrench-deadband editor.
+        ``_set_orchestrator_doubles`` in shape.
         """
         if not updates:
             return True, []
-        if not self._cli_gravcomp_set_params.wait_for_service(
-                timeout_sec=0.2):
+        if not set_cli.wait_for_service(timeout_sec=0.2):
             return False, [{
                 "name": n, "successful": False,
-                "reason": (f"gravity-compensation set_parameters "
-                           f"service unavailable at {self._gravcomp_ns!r}"),
+                "reason": (f"set_parameters service unavailable at "
+                           f"{node_label!r}"),
             } for n in updates]
         params: List[Parameter] = []
         ordered_names: List[str] = []
@@ -1772,8 +1821,7 @@ class DashboardNode(Node):
             ordered_names.append(name)
         req = SetParameters.Request()
         req.parameters = params
-        resp = self._service_call_sync(
-            self._cli_gravcomp_set_params, req, self._service_timeout)
+        resp = self._service_call_sync(set_cli, req, self._service_timeout)
         if resp is None:
             return False, [{
                 "name": n, "successful": False,
@@ -1794,10 +1842,11 @@ class DashboardNode(Node):
         """Return the current per-axis force / torque dead-zone vectors.
 
         Each entry's ``value`` is a 3-element list (xyz) or ``None`` if
-        the gravity-compensation node is not reachable.
+        the orchestrator is not reachable.
         """
         names = [n for (n, _l, _u) in _WRENCH_DEADBAND_PARAMS]
-        values = self._get_gravcomp_double_arrays(names)
+        values = self._get_double_arrays(
+            self._cli_orchestrator_get_params, names)
         items: List[Dict[str, Any]] = []
         any_missing = False
         for name, label, unit in _WRENCH_DEADBAND_PARAMS:
@@ -1812,19 +1861,19 @@ class DashboardNode(Node):
             })
         return {
             "ok":                True,
-            "node":              self._gravcomp_ns,
+            "node":              self._orchestrator_ns,
             "available":         not any_missing,
             "deadbands":         items,
             "message": (
-                "per-axis soft deadband applied to the compensated "
-                "wrench just before publishing; live-tunable on "
-                f"{self._gravcomp_ns}"
+                "per-axis soft deadband applied to the relayed wrench "
+                "before it reaches the FZI controllers; live-tunable on "
+                f"{self._orchestrator_ns}"
             ),
         }
 
     def api_set_wrench_deadband(self, body: Dict[str, Any]
                                 ) -> Dict[str, Any]:
-        """Push edits to the gravity-comp node's dead-zone parameters.
+        """Push edits to the orchestrator's wrench dead-zone parameters.
 
         Body shape::
 
@@ -1833,8 +1882,8 @@ class DashboardNode(Node):
         Unknown names are rejected (the dashboard restricts the editor
         to ``_WRENCH_DEADBAND_PARAMS``); non-finite, non-3-vector, and
         negative values are rejected here before the round-trip.  The
-        gravity-compensation node does its own validation too, which
-        we surface verbatim.
+        orchestrator does its own validation too, which we surface
+        verbatim.
         """
         if not isinstance(body, dict):
             raise RuntimeError("body must be a JSON object")
@@ -1883,7 +1932,8 @@ class DashboardNode(Node):
             return {"ok": True, "updated": 0, "results": [],
                     "message": "no deadbands supplied"}
 
-        ok, results = self._set_gravcomp_double_arrays(updates)
+        ok, results = self._set_double_arrays(
+            self._cli_orchestrator_set_params, updates, self._orchestrator_ns)
         successful = sum(1 for r in results if r["successful"])
         return {
             "ok":      ok,
@@ -1891,8 +1941,8 @@ class DashboardNode(Node):
             "results": results,
             "message": (
                 f"applied {successful}/{len(results)} deadband(s) "
-                f"to {self._gravcomp_ns}" if ok else
-                f"gravity-compensation rejected "
+                f"to {self._orchestrator_ns}" if ok else
+                f"orchestrator rejected "
                 f"{len(results) - successful}/{len(results)} deadband(s)"
             ),
         }

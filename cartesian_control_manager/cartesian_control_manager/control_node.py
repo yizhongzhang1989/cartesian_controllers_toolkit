@@ -201,6 +201,18 @@ _PARAM_DECLARATIONS: List[Tuple[str, object]] = [
     ("engage_max_joint_velocity", 0.05),  # rad/s; refuse engage above this
     ("ft_stale_after",            0.25),
     ("joint_states_stale_after",  0.25),
+    # wrench dead-zone -----------------------------------------------------
+    # Per-axis soft (continuous) dead-zone applied to the relayed wrench
+    # just before it is forwarded to the FZI controllers, so small residual
+    # forces (sensor noise, imperfect gravity compensation) do not make the
+    # arm drift in free-drive.  Applied HERE (the universal wrench relay)
+    # rather than in an optional upstream gravity-compensation node, so the
+    # deadband is available on every robot regardless of how the compensated
+    # wrench is produced.  3-element ``double[]`` (x,y,z), N / Nm, >= 0.
+    # The safety supervisor still sees the RAW wrench (deadband never masks
+    # a real force from the trip logic).
+    ("force_deadband",  [0.0, 0.0, 0.0]),
+    ("torque_deadband", [0.0, 0.0, 0.0]),
 ]
 
 
@@ -438,6 +450,34 @@ class CartesianControlNode(Node):
         self._ft_stale_after = float(gp("ft_stale_after"))
         self._joint_states_stale_after = float(gp("joint_states_stale_after"))
 
+        # wrench dead-zone (per-axis, applied to the relayed wrench) -------
+        self._force_deadband = self._validate_deadband(
+            gp("force_deadband"), "force_deadband")
+        self._torque_deadband = self._validate_deadband(
+            gp("torque_deadband"), "torque_deadband")
+
+    @staticmethod
+    def _validate_deadband(value, name: str) -> np.ndarray:
+        """Coerce a deadband parameter to a validated length-3 float array.
+
+        Raises ``ValueError`` on the wrong length / non-finite / negative
+        entries so a bad startup value fails loudly; live updates are
+        validated the same way in :meth:`_on_param_change` (which reports
+        the reason instead of raising).
+        """
+        vec = list(value) if value is not None else []
+        if len(vec) != 3:
+            raise ValueError(
+                f"{name} must have exactly 3 elements (x, y, z); got {vec!r}")
+        out = np.zeros(3, dtype=float)
+        for i, v in enumerate(vec):
+            fv = float(v)
+            if not np.isfinite(fv) or fv < 0.0:
+                raise ValueError(
+                    f"{name}[{i}]={v!r} must be finite and >= 0")
+            out[i] = fv
+        return out
+
     def _on_param_change(self, params) -> SetParametersResult:
         # target_wrench axis names -> (slot in self._target_wrench, kind)
         # where kind is "force" (limited by max_wrench_force) or
@@ -490,6 +530,12 @@ class CartesianControlNode(Node):
                         successful=False,
                         reason=("refuse to change active_controller_name "
                                 "while engaged; disengage first"))
+            if p.name in ("force_deadband", "torque_deadband"):
+                try:
+                    self._validate_deadband(p.value, p.name)
+                except ValueError as exc:
+                    return SetParametersResult(
+                        successful=False, reason=str(exc))
         # Apply.
         for p in params:
             if p.name == "max_wrench_force":
@@ -527,25 +573,59 @@ class CartesianControlNode(Node):
                         f"("
                         f"{'orchestrator now drives every FZI target_wrench topic' if new_val else 'orchestrator now SILENT on every FZI target_wrench topic; external publisher may drive them directly'}"
                         f")")
+            elif p.name in ("force_deadband", "torque_deadband"):
+                vec = self._validate_deadband(p.value, p.name)
+                if p.name == "force_deadband":
+                    self._force_deadband = vec
+                else:
+                    self._torque_deadband = vec
+                self.get_logger().info(f"{p.name} -> {vec.tolist()}")
         return SetParametersResult(successful=True)
 
     # ------------------------------------------------------------------
     # subscriptions
     # ------------------------------------------------------------------
     def _on_wrench(self, msg: WrenchStamped) -> None:
-        # Forward verbatim to every FZI controller's RELIABLE input --
-        # FZI does its own conditioning so we don't filter on this side.
-        # The relays stay live regardless of which controller is engaged
-        # so engage is a single switch_controller call (no rewiring).
-        for pub in self._pubs_ft.values():
-            pub.publish(msg)
-        # Cache for the safety supervisor.
+        # Cache the RAW wrench for the safety supervisor first -- the
+        # dead-zone below must never hide a real force from the trip logic.
+        raw = np.array([
+            msg.wrench.force.x, msg.wrench.force.y, msg.wrench.force.z,
+            msg.wrench.torque.x, msg.wrench.torque.y, msg.wrench.torque.z,
+        ])
         with self._lock:
-            self._last_wrench = np.array([
-                msg.wrench.force.x, msg.wrench.force.y, msg.wrench.force.z,
-                msg.wrench.torque.x, msg.wrench.torque.y, msg.wrench.torque.z,
-            ])
+            self._last_wrench = raw
             self._last_wrench_mono = time.monotonic()
+
+        # Apply the per-axis soft dead-zone, then forward to every FZI
+        # controller's RELIABLE input.  Applying it in this universal relay
+        # (rather than an optional upstream gravity-compensation node) means
+        # every robot gets a live-tunable wrench deadband for free-drive.
+        # The relays stay live regardless of which controller is engaged so
+        # engage is a single switch_controller call (no rewiring).
+        out = self._apply_wrench_deadband(raw)
+        if np.array_equal(out, raw):
+            fwd = msg  # no deadband active -> forward verbatim
+        else:
+            fwd = WrenchStamped()
+            fwd.header = msg.header
+            fwd.wrench.force.x, fwd.wrench.force.y, fwd.wrench.force.z = (
+                float(out[0]), float(out[1]), float(out[2]))
+            fwd.wrench.torque.x, fwd.wrench.torque.y, fwd.wrench.torque.z = (
+                float(out[3]), float(out[4]), float(out[5]))
+        for pub in self._pubs_ft.values():
+            pub.publish(fwd)
+
+    def _apply_wrench_deadband(self, vec: np.ndarray) -> np.ndarray:
+        """Per-axis soft dead-zone applied to the relayed wrench.
+
+        Each component is shrunk toward zero by the configured deadband and
+        anything within it is zeroed.  Continuous at the boundary (no step),
+        so the downstream FZI controller sees a smooth signal.  The array
+        references are replaced atomically in ``_on_param_change`` so this
+        lock-free read is safe.
+        """
+        db = np.concatenate([self._force_deadband, self._torque_deadband])
+        return np.sign(vec) * np.maximum(0.0, np.abs(vec) - db)
 
     def _on_external_target_wrench(self, msg: WrenchStamped) -> None:
         """Forward an externally-published setpoint to every consumer.

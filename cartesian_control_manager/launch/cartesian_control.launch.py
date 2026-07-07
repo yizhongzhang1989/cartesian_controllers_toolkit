@@ -137,6 +137,14 @@ _FALLBACKS = {
     "engage_max_joint_velocity": 0.05,
     "ft_stale_after":            0.25,
     "joint_states_stale_after":  0.25,
+    # Per-axis wrench deadband (N / N*m) applied to the RELAYED sensor
+    # wrench before it reaches the FZI force/compliance controllers, so a
+    # small residual (e.g. imperfect gravity comp) cannot slowly drift the
+    # soft compliance spring.  Robot-neutral default = no deadband; the
+    # per-robot YAML section supplies the real values.  List-valued, so
+    # read straight from the per-arm section (see _SECTION_ONLY_KEYS).
+    "force_deadband":  [0.0, 0.0, 0.0],
+    "torque_deadband": [0.0, 0.0, 0.0],
 }
 
 
@@ -215,6 +223,15 @@ _LAUNCH_ONLY_KEYS = (
     "fzi_controller_yaml_relpath",
 )
 
+# Keys whose values are LISTS (per-axis wrench deadbands).  They are
+# consumed by the node but cannot round-trip through a string-typed
+# LaunchConfiguration, so they are read straight from the per-arm YAML
+# section and are never exposed as CLI launch args.
+_SECTION_ONLY_KEYS = (
+    "force_deadband",
+    "torque_deadband",
+)
+
 
 def generate_launch_description() -> LaunchDescription:
     # Declare launch args from the legacy section's defaults so that
@@ -225,6 +242,8 @@ def generate_launch_description() -> LaunchDescription:
 
     args = []
     for key, default in _FALLBACKS.items():
+        if key in _SECTION_ONLY_KEYS:
+            continue
         if isinstance(default, bool):
             args.append(DeclareLaunchArgument(key, default_value=_bool(d[key])))
         else:
@@ -289,6 +308,11 @@ def generate_launch_description() -> LaunchDescription:
         parameters: dict = {}
         for key, fallback in _FALLBACKS.items():
             if key in _LAUNCH_ONLY_KEYS:
+                continue
+            if key in _SECTION_ONLY_KEYS:
+                # List-valued: taken straight from the per-arm section
+                # (falls back to the robot-neutral default in _FALLBACKS).
+                parameters[key] = section_defaults.get(key, fallback)
                 continue
             cli_value = LaunchConfiguration(key).perform(context)
             legacy_default = _bool(d[key]) if isinstance(fallback, bool) \
