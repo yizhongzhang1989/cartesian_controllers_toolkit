@@ -51,10 +51,13 @@ Examples::
 """
 
 import os
+import re
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, LogInfo, OpaqueFunction
+from launch.actions import (
+    DeclareLaunchArgument, IncludeLaunchDescription, LogInfo, OpaqueFunction)
+from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -145,6 +148,17 @@ _FALLBACKS = {
     # read straight from the per-arm section (see _SECTION_ONLY_KEYS).
     "force_deadband":  [0.0, 0.0, 0.0],
     "torque_deadband": [0.0, 0.0, 0.0],
+    # Optional force-control dashboard (cartesian_controller_dashboard).
+    # Empty => no dashboard; any port => ALSO launch the dashboard wired to
+    # THIS orchestrator instance (plots wrench_topic, edits the paired
+    # ft_sensor_gravity_compensation node's deadband, engage/disengage).
+    "dashboard_port": "",
+    # Node whose force/torque deadband the dashboard editor targets; empty
+    # => the paired /ft_sensor_gravity_compensation[_<instance>] node.
+    "dashboard_deadband_node_ns": "",
+    # Base frame for the dashboard TCP-pose display; empty => derived from the
+    # FZI target frame (``<...>_LinkN`` -> ``<...>_base_link``).
+    "dashboard_base_frame": "",
 }
 
 
@@ -221,6 +235,9 @@ _LAUNCH_ONLY_KEYS = (
     "instance_name",
     "fzi_controller_yaml_package",
     "fzi_controller_yaml_relpath",
+    "dashboard_port",
+    "dashboard_deadband_node_ns",
+    "dashboard_base_frame",
 )
 
 # Keys whose values are LISTS (per-axis wrench deadbands).  They are
@@ -343,6 +360,36 @@ def generate_launch_description() -> LaunchDescription:
         node_name = (f"cartesian_control_manager{suffix}" if instance
                      else "cartesian_control_manager")
 
+        # Optionally bring up the force-control dashboard wired to THIS
+        # orchestrator instance (plot the compensated wrench_topic, edit the
+        # paired compensation node's deadband, engage/disengage).
+        _dash = []
+        _dash_port = LaunchConfiguration("dashboard_port").perform(context).strip()
+        if _dash_port and _dash_port != "0":
+            _tool = str(parameters.get("fzi_target_frame", ""))
+            _deadband_node = (
+                LaunchConfiguration("dashboard_deadband_node_ns")
+                .perform(context).strip()
+                or f"/ft_sensor_gravity_compensation{suffix}")
+            _base = (
+                LaunchConfiguration("dashboard_base_frame").perform(context).strip()
+                or re.sub(r"_[Ll]ink\d+$", "_base_link", _tool))
+            _dash_args = {
+                "port": _dash_port,
+                "orchestrator_ns": node_name,
+                "controller_name": str(parameters.get("active_controller_name", "")),
+                "wrench_topic": str(parameters.get("wrench_topic", "")),
+                "deadband_node_ns": _deadband_node,
+                "tool_frame": _tool,
+            }
+            if _base and _base != _tool:
+                _dash_args["base_frame"] = _base
+            _dash.append(IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(os.path.join(
+                    get_package_share_directory("cartesian_controller_dashboard"),
+                    "launch", "dashboard.launch.py")),
+                launch_arguments=_dash_args.items()))
+
         return [
             LogInfo(msg=(
                 f"[cartesian_control_manager] instance={instance!r} "
@@ -379,6 +426,7 @@ def generate_launch_description() -> LaunchDescription:
                 emulate_tty=True,
                 parameters=[parameters],
             ),
+            *_dash,
         ]
 
     return LaunchDescription([

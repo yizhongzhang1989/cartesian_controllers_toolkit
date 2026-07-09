@@ -4,6 +4,17 @@
 <meta charset="utf-8">
 <title>Cartesian controller dashboard</title>
 <link rel="stylesheet" href="/static/dashboard.css">
+<!-- Three.js is vendored under static/vendor so the 3D viewer works fully
+     offline (no CDN). The import map lets viewer.js use the bare specifiers
+     "three" and "three/addons/..." exactly like the upstream examples. -->
+<script type="importmap">
+{
+  "imports": {
+    "three": "/static/vendor/three.module.js",
+    "three/addons/": "/static/vendor/addons/"
+  }
+}
+</script>
 </head>
 <body>
   <!-- ============================================================
@@ -95,42 +106,48 @@
   <div class="body-split">
     <div class="body-col">
       <div class="panel" id="urdf-panel">
-        <!-- Canvas fills the panel; the title / info / controls sit on
-             top in a semi-transparent floating overlay (top-right) so
-             the 3D view gets the maximum possible display area.
-             Error messages from /api/urdf_model surface in a separate
-             top-left overlay (#urdf-overlay) that the JS layer toggles. -->
-        <canvas id="urdf-canvas"></canvas>
-        <div id="urdf-overlay"></div>
-        <div class="urdf-floating" id="urdf-floating">
-          <div class="urdf-floating-header">
-            <span class="urdf-floating-title">3D model</span>
-            <span class="pill" id="urdf-status">--</span>
-            <button id="urdf-collapse" type="button"
-                    class="urdf-floating-toggle"
-                    aria-expanded="true"
-                    aria-controls="urdf-floating-body"
+        <!-- Three.js WebGL viewer: the robot's mesh visuals (STL / COLLADA)
+             plus a skeleton fallback, drawn at the live TF pose with a triad
+             at the TCP / tip frame. Forward kinematics is done server-side
+             (see /api/viewer_state); this canvas only draws the per-link 4x4
+             transforms it is handed, easing them frame-to-frame for smooth
+             motion. The floating overlay (top-right) carries the view options
+             and the live joint-angle bars; #loading covers the canvas until
+             the first /robot_description arrives. -->
+        <canvas id="viewer"></canvas>
+        <div id="labels"></div>
+        <div id="loading"><div class="spinner"></div>Waiting for /robot_description…</div>
+        <div class="view-float" id="view-float">
+          <div class="vf-header">
+            <span class="vf-title">3D model</span>
+            <span class="pill" id="model-pill">—</span>
+            <button id="vf-collapse" type="button" class="vf-toggle"
+                    aria-expanded="true" aria-controls="vf-body"
                     title="Collapse panel">&minus;</button>
           </div>
-          <div class="urdf-floating-body" id="urdf-floating-body">
-            <div class="urdf-floating-rows">
-              <span>root</span><code id="urdf-root">--</code>
-              <span>links</span><span class="num" id="urdf-nlinks">--</span>
-              <span>joints</span><span class="num" id="urdf-njoints">--</span>
-              <span>tf age</span><span class="num" id="urdf-tfage">--</span>
+          <div class="vf-body" id="vf-body">
+            <div class="vf-rows">
+              <span>links</span><span class="num" id="n-links">—</span>
+              <span>joints</span><span class="num" id="n-joints">—</span>
+              <span>selected</span><span class="num" id="sel-link">—</span>
+              <span>parent</span><span class="num" id="sel-parent">—</span>
             </div>
-            <div class="urdf-floating-section-title">Joints</div>
-            <div class="urdf-joints" id="urdf-joints"></div>
-            <div class="urdf-floating-controls">
-              <label><input id="urdf-labels" type="checkbox" checked>labels</label>
-              <label><input id="urdf-axes" type="checkbox" checked>axes</label>
+            <div class="vf-controls">
+              <label><input type="checkbox" id="show-mesh" checked>
+                <span id="mesh-lbl">mesh</span></label>
+              <label><input type="checkbox" id="show-labels">labels</label>
+              <label><input type="checkbox" id="show-frames">frames</label>
             </div>
-            <div class="urdf-floating-buttons">
-              <button id="urdf-fit" type="button" class="ghost">Fit view</button>
-              <button id="urdf-reload" type="button" class="ghost">Reload</button>
+            <div class="vf-buttons">
+              <button id="fit" type="button" class="ghost">Fit view</button>
             </div>
-            <div class="urdf-floating-hint">
-              drag = orbit &middot; wheel = zoom &middot; right-drag = pan
+            <div class="vf-hint">
+              drag = orbit &middot; wheel = zoom &middot; click a link to select
+            </div>
+            <div class="vf-section jbhead">Joint angles
+              <span id="js-age" class="jbage"></span></div>
+            <div id="joint-bars" class="joint-bars">
+              <div class="muted sm">waiting for /joint_states…</div>
             </div>
           </div>
         </div>
@@ -498,7 +515,7 @@
   <div id="toast" class="toast"></div>
 
 <script src="/static/dashboard.js" defer></script>
-<script src="/static/urdf_viewer.js" defer></script>
+<script type="module" src="/static/viewer.js"></script>
 <script src="/static/force_plot.js" defer></script>
 </body>
 </html>

@@ -901,9 +901,28 @@ class CartesianControlNode(Node):
         Uses ``self._active_controller_name`` (settable at runtime via the
         ``active_controller_name`` parameter, refused while engaged).
         """
-        return self._switch_controllers_sync(
+        ok, why = self._switch_controllers_sync(
             activate=[self._active_controller_name],
             deactivate=[self._fzi_jtc_controller_name])
+        if ok:
+            return ok, why
+        # The JTC may already be inactive -- e.g. this orchestrator was
+        # restarted (or cartesian.launch reloaded) while a controller was
+        # engaged, so the disengage that would have re-activated the JTC never
+        # ran.  A STRICT switch that deactivates an already-inactive controller
+        # fails, so retry activating the FZI controller ALONE.  That succeeds
+        # only when the JTC is genuinely not holding the shared command
+        # interface; if it WERE still active the resource conflict makes this
+        # fail too, and we then surface the original error.
+        ok2, _why2 = self._switch_controllers_sync(
+            activate=[self._active_controller_name], deactivate=[])
+        if ok2:
+            self.get_logger().warn(
+                f"{self._fzi_jtc_controller_name!r} was already inactive at "
+                f"engage; activated {self._active_controller_name!r} without "
+                "deactivating it (the JTC will be re-activated on disengage).")
+            return True, "ok (JTC already inactive)"
+        return ok, why
 
     def _switch_to_jtc_sync(self) -> Tuple[bool, str]:
         """Atomically deactivate whichever FZI controller is engaged and

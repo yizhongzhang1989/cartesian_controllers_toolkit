@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 import math
 import mimetypes
+import os
 import sys
 import threading
 import time
@@ -40,7 +41,7 @@ from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Deque, Dict, List, Optional, Tuple
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 import rclpy
 from geometry_msgs.msg import (PoseStamped, WrenchStamped)
@@ -55,6 +56,16 @@ from sensor_msgs.msg import JointState
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
 from tf2_ros import Buffer, TransformException, TransformListener
+
+# ament share-dir resolver for the 3D viewer's /mesh proxy (URDF meshes are
+# usually referenced as ``package://<pkg>/...``).  Soft-imported so the node
+# still starts in environments where ament isn't importable.
+try:
+    from ament_index_python.packages import (  # type: ignore
+        get_package_share_directory,
+    )
+except Exception:  # noqa: BLE001
+    get_package_share_directory = None  # type: ignore
 
 # `cct_common.config_manager` exposes the project's robot_config.yaml.  The
 # dashboard's "Tool frames" editor reads `<bringup>.aux_frames`
@@ -284,17 +295,18 @@ _TARGET_WRENCH_NAMES = {n for (n, _l, _k) in _TARGET_WRENCH_PARAMS}
 # ---------------------------------------------------------------------------
 # wrench dead-zone editable from the dashboard.
 #
-# These parameters live on the orchestrator (``cartesian_control_manager``),
-# which applies them to the relayed wrench just before forwarding it to the
-# FZI controllers (see ``CartesianControlNode._apply_wrench_deadband``).
+# These parameters live on the node named by the ``deadband_node_ns`` param --
+# the ft_sensor_gravity_compensation preprocessing node, which applies them
+# while turning the raw sensor wrench into the CONTROL wrench the FZI
+# controllers consume.  (When ``deadband_node_ns`` is empty the dashboard falls
+# back to the orchestrator, whose ``_apply_wrench_deadband`` applied the same
+# soft deadband on the relayed wrench -- the legacy architecture.)
 # Per-axis soft (continuous) shrinkage so the downstream cartesian-force /
 # compliance controller does not see a step change at the dead-zone boundary.
-# Living on the always-present orchestrator makes the deadband available on
-# every robot, regardless of how the compensated wrench is produced.
 #
 # Each entry is ``(param_name, ui_label, unit_label)``.  Both are 3-element
 # ``double[]`` arrays of N (force) or Nm (torque); validation (length 3,
-# finite, >= 0) is done both here and in the orchestrator's
+# finite, >= 0) is done both here and in the owning node's
 # on-set-parameters callback.
 _WRENCH_DEADBAND_PARAMS: List[Tuple[str, str, str]] = [
     # (param_name, ui_label, unit_label)
@@ -503,6 +515,33 @@ class _DashboardHandler(BaseHTTPRequestHandler):
                 # not return until the client drops.
                 self._serve_urdf_tf_stream()
                 return
+            if path == "/api/viewer_state":
+                # Combined model + live pose for the Three.js viewer
+                # (static/viewer.js); same JSON contract as
+                # robot_test_dashboard so the front-end is shared verbatim.
+                self._send_json(200, self._dashboard.api_viewer_state())
+                return
+            if path == "/mesh":
+                # Mesh proxy: resolve a URDF ``package://`` / ``file://``
+                # mesh path server-side and stream the bytes to the viewer.
+                params = parse_qs(urlparse(self.path).query)
+                pkg = params.get("pkg", [""])[0]
+                rel = params.get("path", [""])[0]
+                data = self._dashboard.read_mesh(pkg, rel)
+                if data is None:
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                low = rel.lower()
+                if low.endswith(".dae"):
+                    ctype = "model/vnd.collada+xml"
+                elif low.endswith(".stl"):
+                    ctype = "model/stl"
+                else:
+                    ctype = (mimetypes.guess_type(rel)[0]
+                             or "application/octet-stream")
+                self._send_static(data, ctype)
+                return
             if path == "/api/aux_frames":
                 self._send_json(200, self._dashboard.api_get_aux_frames())
                 return
@@ -596,6 +635,14 @@ class DashboardNode(Node):
     _PARAM_DECLARATIONS: List[Tuple[str, object]] = [
         # connectivity ---------------------------------------------------
         ("orchestrator_ns",  "/cartesian_control_manager"),
+        # Node that OWNS the wrench deadband.  In the current architecture the
+        # per-arm ft_sensor_gravity_compensation preprocessing node applies the
+        # soft deadband to produce the CONTROL wrench, so the deadband editor +
+        # wrench-plot annotation read / write ``force_deadband`` /
+        # ``torque_deadband`` on THIS node.  Empty falls back to
+        # ``orchestrator_ns`` (legacy setups where the orchestrator applied the
+        # deadband itself).
+        ("deadband_node_ns", ""),
         # Catalogue of FZI controller node names this dashboard knows
         # how to talk to.  Must match the orchestrator's
         # ``available_controllers`` list (this is the *fallback* for
@@ -645,6 +692,9 @@ class DashboardNode(Node):
 
         gp = lambda n: self.get_parameter(n).value  # noqa: E731
         self._orchestrator_ns = str(gp("orchestrator_ns")).rstrip("/")
+        # Node that owns the wrench deadband (see param docs); empty -> reuse
+        # the orchestrator (legacy).
+        self._deadband_node_ns = str(gp("deadband_node_ns")).rstrip("/")
         # Catalogue of controller names we'll create per-controller param
         # clients for.  Order is not significant.
         avail = list(gp("available_controllers") or [])
@@ -728,6 +778,10 @@ class DashboardNode(Node):
         self._urdf_xml: Optional[str] = None        # raw XML payload
         self._urdf_model: Optional[Dict[str, Any]] = None  # parsed skeleton
         self._urdf_mono: Optional[float] = None     # when URDF arrived
+        # Mesh <visual>s parsed from the same URDF for the 3D viewer, plus a
+        # small cache of resolved package share dirs for the /mesh proxy.
+        self._visuals: List[dict] = []
+        self._pkg_dirs: Dict[str, Optional[str]] = {}
 
         # ---- callback group (reentrant for HTTP-thread service calls) --
         self._cbgroup = ReentrantCallbackGroup()
@@ -799,6 +853,26 @@ class DashboardNode(Node):
             GetParameters,
             f"{self._orchestrator_ns}/get_parameters",
             callback_group=self._cbgroup)
+
+        # Deadband ownership: the per-arm ft_sensor_gravity_compensation node
+        # owns the wrench deadband (it applies it to produce the control
+        # wrench).  Target ITS parameter services for the deadband editor +
+        # the wrench-plot deadband annotation.  When ``deadband_node_ns`` is
+        # empty we fall back to the orchestrator (legacy: the orchestrator
+        # applied the deadband itself), reusing the clients created above.
+        self._deadband_node = self._deadband_node_ns or self._orchestrator_ns
+        if self._deadband_node == self._orchestrator_ns:
+            self._cli_deadband_get_params = self._cli_orchestrator_get_params
+            self._cli_deadband_set_params = self._cli_orchestrator_set_params
+        else:
+            self._cli_deadband_get_params = self.create_client(
+                GetParameters,
+                f"{self._deadband_node}/get_parameters",
+                callback_group=self._cbgroup)
+            self._cli_deadband_set_params = self.create_client(
+                SetParameters,
+                f"{self._deadband_node}/set_parameters",
+                callback_group=self._cbgroup)
 
         # Service client for ``robot_state_publisher``'s parameters.
         # Used by the "Tool frames" editor to push an updated
@@ -1021,10 +1095,12 @@ class DashboardNode(Node):
         """
         xml_text = msg.data or ""
         model = _parse_urdf(xml_text)
+        visuals = parse_visuals(xml_text)
         with self._lock:
             self._urdf_xml = xml_text
             self._urdf_model = model
             self._urdf_mono = time.monotonic()
+            self._visuals = visuals
         if model is None:
             self.get_logger().warn(
                 "received /robot_description but could not parse URDF "
@@ -1395,7 +1471,8 @@ class DashboardNode(Node):
             buf = list(self._wrench_log)
             hz = self._wrench_rate.hz()
         if not buf:
-            return {"samples": [], "now": now, "hz": hz}
+            return {"samples": [], "now": now, "hz": hz,
+                    "wrench_topic": self._wrench_topic}
         # Determine cutoff time for new samples.
         if since is None:
             cutoff = now - max_window_s
@@ -1411,7 +1488,8 @@ class DashboardNode(Node):
                 break
             out.append([t, fx, fy, fz, tx, ty, tz])
         out.reverse()
-        return {"samples": out, "now": now, "hz": hz}
+        return {"samples": out, "now": now, "hz": hz,
+                "wrench_topic": self._wrench_topic}
 
     def api_params(self) -> Dict[str, Any]:
         active = self._active_controller()
@@ -1842,11 +1920,11 @@ class DashboardNode(Node):
         """Return the current per-axis force / torque dead-zone vectors.
 
         Each entry's ``value`` is a 3-element list (xyz) or ``None`` if
-        the orchestrator is not reachable.
+        the deadband-owning node is not reachable.
         """
         names = [n for (n, _l, _u) in _WRENCH_DEADBAND_PARAMS]
         values = self._get_double_arrays(
-            self._cli_orchestrator_get_params, names)
+            self._cli_deadband_get_params, names)
         items: List[Dict[str, Any]] = []
         any_missing = False
         for name, label, unit in _WRENCH_DEADBAND_PARAMS:
@@ -1861,19 +1939,19 @@ class DashboardNode(Node):
             })
         return {
             "ok":                True,
-            "node":              self._orchestrator_ns,
+            "node":              self._deadband_node,
             "available":         not any_missing,
             "deadbands":         items,
             "message": (
-                "per-axis soft deadband applied to the relayed wrench "
-                "before it reaches the FZI controllers; live-tunable on "
-                f"{self._orchestrator_ns}"
+                "per-axis soft deadband applied by the F/T preprocessing "
+                "node to produce the control wrench the FZI controllers "
+                f"receive; live-tunable on {self._deadband_node}"
             ),
         }
 
     def api_set_wrench_deadband(self, body: Dict[str, Any]
                                 ) -> Dict[str, Any]:
-        """Push edits to the orchestrator's wrench dead-zone parameters.
+        """Push edits to the deadband-owning node's wrench dead-zone params.
 
         Body shape::
 
@@ -1882,7 +1960,7 @@ class DashboardNode(Node):
         Unknown names are rejected (the dashboard restricts the editor
         to ``_WRENCH_DEADBAND_PARAMS``); non-finite, non-3-vector, and
         negative values are rejected here before the round-trip.  The
-        orchestrator does its own validation too, which we surface
+        target node does its own validation too, which we surface
         verbatim.
         """
         if not isinstance(body, dict):
@@ -1933,7 +2011,7 @@ class DashboardNode(Node):
                     "message": "no deadbands supplied"}
 
         ok, results = self._set_double_arrays(
-            self._cli_orchestrator_set_params, updates, self._orchestrator_ns)
+            self._cli_deadband_set_params, updates, self._deadband_node)
         successful = sum(1 for r in results if r["successful"])
         return {
             "ok":      ok,
@@ -2583,6 +2661,146 @@ class DashboardNode(Node):
         }
 
     # ------------------------------------------------------------------
+    # 3D viewer: server-side FK (4x4), URDF mesh proxy, and the combined
+    # model+pose snapshot consumed by static/viewer.js (the Three.js WebGL
+    # viewer).  This mirrors robot_test_dashboard's ``/api/state`` contract
+    # so both dashboards share the identical front-end viewer.
+    # ------------------------------------------------------------------
+    def _link_tf_matrix(self, links: List[str],
+                        base: str) -> Dict[str, list]:
+        """Look up ``base -> link`` for every link and return 4x4 row-major
+        world transforms (the shape viewer.js consumes).  Links whose TF
+        isn't available yet are omitted; the viewer eases them in once they
+        appear."""
+        out: Dict[str, list] = {}
+        if self._tf_buffer is None:
+            return out
+        zero_time = rclpy.time.Time()
+        for link in links:
+            if link == base:
+                out[link] = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0],
+                             [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]]
+                continue
+            try:
+                tf = self._tf_buffer.lookup_transform(base, link, zero_time)
+            except TransformException:
+                continue
+            t = tf.transform.translation
+            q = tf.transform.rotation
+            R = _quat_to_R(q.x, q.y, q.z, q.w)
+            out[link] = [
+                [R[0][0], R[0][1], R[0][2], float(t.x)],
+                [R[1][0], R[1][1], R[1][2], float(t.y)],
+                [R[2][0], R[2][1], R[2][2], float(t.z)],
+                [0.0, 0.0, 0.0, 1.0],
+            ]
+        return out
+
+    def _mesh_url(self, filename: str) -> str:
+        """Rewrite a URDF mesh filename into a /mesh proxy URL the browser
+        can fetch (``package://`` / ``file://`` are resolved server-side by
+        :meth:`read_mesh`)."""
+        if filename.startswith("package://"):
+            pkg, _, rel = filename[len("package://"):].partition("/")
+            return f"/mesh?pkg={quote(pkg)}&path={quote(rel)}"
+        if filename.startswith("file://"):
+            return f"/mesh?path={quote(filename[len('file://'):])}"
+        return f"/mesh?path={quote(filename)}"
+
+    def _package_dir(self, pkg: str) -> Optional[str]:
+        if pkg in self._pkg_dirs:
+            return self._pkg_dirs[pkg]
+        resolved: Optional[str] = None
+        if get_package_share_directory is not None:
+            try:
+                resolved = get_package_share_directory(pkg)
+            except Exception:  # noqa: BLE001
+                resolved = None
+        self._pkg_dirs[pkg] = resolved
+        return resolved
+
+    def read_mesh(self, pkg: str, rel: str) -> Optional[bytes]:
+        """Read a mesh file for the /mesh proxy.  ``pkg`` resolves via the
+        ament share dir; an empty ``pkg`` treats ``rel`` as a filesystem
+        path.  Returns ``None`` (-> 404) on any failure.
+
+        The traversal guard is LEXICAL (``os.path.normpath``) so a ``..``
+        cannot escape the package dir, yet a legitimate mesh that is a
+        SYMLINK out of a ``--symlink-install`` share tree still reads -- a
+        ``resolve()``-based check would follow the symlink and wrongly
+        reject it."""
+        rel = unquote(rel or "")
+        if pkg:
+            base = self._package_dir(unquote(pkg))
+            if base is None:
+                return None
+            base_dir = os.path.normpath(base)
+            candidate = os.path.normpath(os.path.join(base_dir, rel))
+            if candidate != base_dir \
+                    and not candidate.startswith(base_dir + os.sep):
+                return None
+            path = Path(candidate)
+        else:
+            path = Path(rel)
+        try:
+            return path.read_bytes()
+        except Exception:  # noqa: BLE001
+            return None
+
+    def api_viewer_state(self) -> Dict[str, Any]:
+        """Combined model + live-pose snapshot for the 3D viewer.
+
+        Same JSON contract as robot_test_dashboard's ``/api/state`` so the
+        two dashboards share ``static/viewer.js`` verbatim: parsed mesh
+        visuals (proxied via /mesh), the joint tree, per-link 4x4 world
+        transforms (server-side FK from TF), the movable-joint metadata and
+        the live joint angles."""
+        with self._lock:
+            model = self._urdf_model
+            visuals = list(self._visuals)
+            joint_pos = dict(self._joint_positions)
+            base = self._base_frame
+            tip = self._tool_frame
+            js_age = (time.monotonic() - self._js_mono
+                      if self._js_mono is not None else None)
+        if model is None:
+            return {"have_model": False}
+        # Render the WHOLE robot in its natural URDF root frame (e.g. ``world``)
+        # instead of one arm's base, so a multi-arm robot isn't shown tilted or
+        # offset by an individual arm's mount.  The TCP triad (tip_frame) still
+        # marks the controlled tool frame.
+        root = model.get("root_link") or base
+        links = list(model["links"])
+        joints = model["joints"]
+        joint_tree = [{"parent": j["parent"], "child": j["child"],
+                       "type": j["type"]} for j in joints]
+        movable = [{"name": j["name"], "type": j["type"],
+                    "lower": j["lower"], "upper": j["upper"]}
+                   for j in joints
+                   if j["type"] in ("revolute", "prismatic", "continuous")]
+        renderable = [v for v in visuals
+                      if str(v["filename"]).lower().endswith((".stl", ".dae"))]
+        mesh_unsupported = bool(visuals) and not renderable
+        link_tf = self._link_tf_matrix(links, root)
+        return {
+            "have_model":       bool(links),
+            "base_frame":       root,
+            "tip_frame":        tip,
+            "links":            links,
+            "has_meshes":       bool(renderable),
+            "mesh_unsupported": mesh_unsupported,
+            "visuals": [
+                {"link": v["link"], "url": self._mesh_url(v["filename"]),
+                 "xyz": v["xyz"], "rpy": v["rpy"], "scale": v["scale"]}
+                for v in renderable],
+            "joint_tree":       joint_tree,
+            "link_tf":          link_tf,
+            "movable_joints":   movable,
+            "joint_values":     joint_pos,
+            "js_age": round(js_age, 2) if js_age is not None else None,
+        }
+
+    # ------------------------------------------------------------------
     def _try_lookup_tcp_pose(self) -> Optional[Dict[str, Any]]:
         """Best-effort TF lookup of ``base_frame -> tool_frame`` for the
         sticky-bar TCP-pose readout.  Returns ``None`` on any failure
@@ -2694,6 +2912,72 @@ class DashboardNode(Node):
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
+def parse_visuals(urdf_xml: str) -> List[dict]:
+    """Return ``[{link, filename, xyz, rpy, scale}]`` for every mesh ``<visual>``.
+
+    Feeds the 3D viewer real geometry (STL / COLLADA).  Primitive visuals
+    (box / cylinder / sphere) are ignored -- the viewer falls back to the
+    kinematic skeleton for links that have no mesh.  Returns ``[]`` on any
+    parse failure.
+    """
+    out: List[dict] = []
+    if not urdf_xml or not urdf_xml.strip():
+        return out
+    try:
+        root = ET.fromstring(urdf_xml)
+    except ET.ParseError:
+        return out
+    for link in root.findall("link"):
+        lname = link.get("name")
+        if not lname:
+            continue
+        for vis in link.findall("visual"):
+            geom = vis.find("geometry")
+            mesh = geom.find("mesh") if geom is not None else None
+            if mesh is None or not mesh.get("filename"):
+                continue
+            origin = vis.find("origin")
+            xyz = [0.0, 0.0, 0.0]
+            rpy = [0.0, 0.0, 0.0]
+            if origin is not None:
+                if origin.get("xyz"):
+                    try:
+                        xyz = [float(x) for x in origin.get("xyz").split()]
+                    except ValueError:
+                        xyz = [0.0, 0.0, 0.0]
+                if origin.get("rpy"):
+                    try:
+                        rpy = [float(x) for x in origin.get("rpy").split()]
+                    except ValueError:
+                        rpy = [0.0, 0.0, 0.0]
+            scale = [1.0, 1.0, 1.0]
+            if mesh.get("scale"):
+                try:
+                    scale = [float(x) for x in mesh.get("scale").split()]
+                except ValueError:
+                    scale = [1.0, 1.0, 1.0]
+            out.append({"link": lname, "filename": mesh.get("filename"),
+                        "xyz": xyz, "rpy": rpy, "scale": scale})
+    return out
+
+
+def _quat_to_R(x: float, y: float, z: float, w: float) -> List[List[float]]:
+    """Quaternion ``(x, y, z, w)`` -> 3x3 rotation matrix (row-major lists)."""
+    n = x * x + y * y + z * z + w * w
+    if n < 1e-12:
+        return [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+    s = 2.0 / n
+    xs, ys, zs = x * s, y * s, z * s
+    wx, wy, wz = w * xs, w * ys, w * zs
+    xx, xy, xz = x * xs, x * ys, x * zs
+    yy, yz, zz = y * ys, y * zs, z * zs
+    return [
+        [1.0 - (yy + zz), xy - wz,         xz + wy],
+        [xy + wz,         1.0 - (xx + zz), yz - wx],
+        [xz - wy,         yz + wx,         1.0 - (xx + yy)],
+    ]
+
+
 def _parse_urdf(xml_text: str) -> Optional[Dict[str, Any]]:
     """Parse a URDF XML string into a minimal skeleton description.
 

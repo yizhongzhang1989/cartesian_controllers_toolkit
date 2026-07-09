@@ -82,6 +82,9 @@
   // Latest server-reported wrench rate (separate from our own poll
   // rate); the backend recomputes this over a 1 s window.
   let serverHz = NaN;
+  // The static topic label in the HTML is a robot-neutral default; the
+  // backend reports the actual subscribed topic, which we show once.
+  let plotTopicShown = false;
   let frozen = false;
   // User-tunable window length (seconds); 10 s default matches the
   // ft_sensor_dashboard.
@@ -382,6 +385,12 @@
       const resp = await fetch(url, { cache: "no-store" });
       if (!resp.ok) throw new Error("HTTP " + resp.status);
       const data = await resp.json();
+      // Show the actual subscribed topic (the HTML label is a default).
+      if (!plotTopicShown && data.wrench_topic) {
+        const el = document.getElementById("ft-plot-topic");
+        if (el) el.textContent = data.wrench_topic;
+        plotTopicShown = true;
+      }
       // Server-reported publish rate is harmless to track every tick
       // -- it only feeds the "alive" status pill, not the plot, so we
       // want it to keep ticking even while frozen so the user can see

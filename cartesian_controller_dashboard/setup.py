@@ -6,12 +6,17 @@ setup(
     name=package_name,
     version='0.1.0',
     packages=find_packages(exclude=['test']),
-    # Ship the static web assets (HTML/CSS/JS) inside the Python
-    # package so dashboard_node.py can resolve them via
-    # ``Path(__file__).parent / "static"`` whether the package was
-    # installed normally or via ``colcon build --symlink-install``.
+    # Ship the static web assets (HTML/CSS/JS + the Three.js vendor bundle
+    # for the 3D viewer) inside the Python package so dashboard_node.py can
+    # resolve them via ``Path(__file__).parent / "static"`` whether the
+    # package was installed normally or via ``colcon build --symlink-install``.
     package_data={
-        package_name: ['static/*.html', 'static/*.css', 'static/*.js'],
+        package_name: [
+            'static/*.html', 'static/*.css', 'static/*.js',
+            'static/vendor/*.js',
+            'static/vendor/addons/controls/*.js',
+            'static/vendor/addons/loaders/*.js',
+        ],
     },
     include_package_data=True,
     data_files=[

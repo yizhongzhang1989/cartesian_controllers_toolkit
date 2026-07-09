@@ -23,6 +23,11 @@ from launch_ros.actions import Node
 
 _FALLBACKS = {
     "orchestrator_ns":     "/cartesian_control_manager",
+    # Node that owns the wrench deadband (the ft_sensor_gravity_compensation
+    # preprocessing node).  Empty -> the dashboard falls back to editing the
+    # orchestrator's own deadband (legacy).  Dual-arm setups pass the per-arm
+    # node explicitly, e.g. deadband_node_ns:=/ft_sensor_gravity_compensation_left.
+    "deadband_node_ns":    "",
     "controller_name":     "cartesian_force_controller",
     "wrench_topic":        "/ft_sensor/wrench_compensated",
     "joint_states_topic":  "/joint_states",
