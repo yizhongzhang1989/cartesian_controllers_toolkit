@@ -306,6 +306,10 @@
       const inp = document.createElement("input");
       inp.type = "number";
       inp.step = (p.kind === "integer") ? "1" : "0.001";
+      if (p.name === "solver.forward_dynamics.link_mass") {
+        inp.min = "0.001";
+        inp.title = "Virtual link mass in kg; must be greater than zero";
+      }
       inp.value = (p.value == null) ? "" : p.value;
       inp.dataset.name = p.name;
       inp.dataset.kind = p.kind;
@@ -356,6 +360,10 @@
     }
     const value = (kind === "integer") ? parseInt(raw, 10) : parseFloat(raw);
     if (isNaN(value)) { toast("not a number", "bad"); return; }
+    if (name === "solver.forward_dynamics.link_mass" &&
+        (!Number.isFinite(value) || value <= 0)) {
+      toast("virtual mass must be greater than zero", "bad"); return;
+    }
     try {
       const r = await api("/api/param", {
         method: "POST",
