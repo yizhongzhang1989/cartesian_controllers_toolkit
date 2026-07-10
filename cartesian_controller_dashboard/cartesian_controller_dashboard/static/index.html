@@ -488,6 +488,19 @@
                 </div>
                 <div class="num small" id="last-target-pos">--</div>
               </div>
+              <div class="cmd-col cmd-gizmo-col">
+                <label class="gizmo-enable"
+                       title="drag a 3D handle on the end-effector in the viewer to command the target pose live (like the ikt_pose_commander dashboard)">
+                  <input type="checkbox" id="gizmo-enable"> Direct 3D drag
+                </label>
+                <div class="gizmo-mode">
+                  <button id="gizmo-move" type="button" class="jog sel">move</button>
+                  <button id="gizmo-rotate" type="button" class="jog">rotate</button>
+                </div>
+                <div class="small muted" id="gizmo-hint">
+                  tick to grab the end-effector in the 3D view
+                </div>
+              </div>
             </div>
           </div>
         </div>

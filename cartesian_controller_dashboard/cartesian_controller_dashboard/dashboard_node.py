@@ -588,6 +588,11 @@ class _DashboardHandler(BaseHTTPRequestHandler):
                 body = self._read_json_body() or {}
                 self._send_json(200, self._dashboard.api_snap_target(body))
                 return
+            if path == "/api/target_pose":
+                body = self._read_json_body() or {}
+                self._send_json(
+                    200, self._dashboard.api_set_target_pose(body))
+                return
             if path == "/api/aux_frames":
                 body = self._read_json_body() or {}
                 self._send_json(200, self._dashboard.api_set_aux_frames(body))
@@ -1437,6 +1442,17 @@ class DashboardNode(Node):
         live["controller_name"] = active
         live["controller_kind"] = self._active_kind()
         live["orchestrator_ns"] = self._orchestrator_ns
+        # Frames the ACTIVE controller actually uses (its own robot_base_link /
+        # end_effector_link).  The 3D drag gizmo places its handle on ``ee_frame``
+        # and the backend commands in ``active_base_frame`` -- so both track the
+        # controller, not the dashboard's display defaults.
+        try:
+            base_f, ee_f = self._resolve_active_frames(active)
+            live["active_base_frame"] = base_f
+            live["ee_frame"] = ee_f
+        except Exception:  # noqa: BLE001
+            live["active_base_frame"] = self._base_frame
+            live["ee_frame"] = self._tool_frame
         return live
 
     def api_state_live(self) -> Dict[str, Any]:
@@ -2150,6 +2166,26 @@ class DashboardNode(Node):
         q = cls._quat_mul(axq(2, drz), q)
         return q
 
+    @staticmethod
+    def _quat_rotate_vec(q: Tuple[float, float, float, float],
+                         v: Tuple[float, float, float]
+                         ) -> Tuple[float, float, float]:
+        """Rotate vector ``v`` by quaternion ``q`` (x, y, z, w).
+
+        Uses the standard ``v' = v + 2*qw*(qv x v) + 2*(qv x (qv x v))``
+        form so no rotation matrix is built.
+        """
+        qx, qy, qz, qw = q
+        vx, vy, vz = v
+        tx = 2.0 * (qy * vz - qz * vy)
+        ty = 2.0 * (qz * vx - qx * vz)
+        tz = 2.0 * (qx * vy - qy * vx)
+        return (
+            vx + qw * tx + (qy * tz - qz * ty),
+            vy + qw * ty + (qz * tx - qx * tz),
+            vz + qw * tz + (qx * ty - qy * tx),
+        )
+
     def _publish_target_pose(self, controller: str, pose: PoseStamped
                              ) -> None:
         pub = self._target_frame_pubs.get(controller)
@@ -2157,6 +2193,47 @@ class DashboardNode(Node):
             raise RuntimeError(
                 f"no target_frame publisher for controller {controller!r}")
         pub.publish(pose)
+
+    def _transform_pose_to(self, ps: PoseStamped, target_frame: str
+                           ) -> PoseStamped:
+        """Return ``ps`` re-expressed in ``target_frame`` via /tf.
+
+        The 3D drag gizmo produces a pose in the viewer's render frame (the
+        URDF model root, e.g. ``world``), but the FZI controllers require the
+        target in their OWN ``robot_base_link``.  We look up
+        ``target_frame <- ps.header.frame_id`` and apply it so the published
+        target lands in the controller's base frame regardless of where the
+        arm is mounted.  Raises RuntimeError (surfaced as a clean 409) if the
+        transform isn't available.
+        """
+        src = (ps.header.frame_id or "").strip().strip("/")
+        tgt = target_frame.strip().strip("/")
+        out = PoseStamped()
+        out.header.frame_id = tgt
+        out.header.stamp = self.get_clock().now().to_msg()
+        if not src or src == tgt:
+            out.pose = ps.pose
+            return out
+        try:
+            tfm = self._tf_buffer.lookup_transform(
+                tgt, src, rclpy.time.Time(),
+                timeout=rclpy.duration.Duration(seconds=0.5))
+        except TransformException as exc:
+            raise RuntimeError(
+                f"tf transform {src!r} -> {tgt!r} failed: {exc}")
+        t = tfm.transform.translation
+        r = tfm.transform.rotation
+        qr = (r.x, r.y, r.z, r.w)
+        p = ps.pose.position
+        rx, ry, rz = self._quat_rotate_vec(qr, (p.x, p.y, p.z))
+        out.pose.position.x = rx + t.x
+        out.pose.position.y = ry + t.y
+        out.pose.position.z = rz + t.z
+        o = ps.pose.orientation
+        nq = self._quat_mul(qr, (o.x, o.y, o.z, o.w))
+        (out.pose.orientation.x, out.pose.orientation.y,
+         out.pose.orientation.z, out.pose.orientation.w) = nq
+        return out
 
     def api_jog(self, body: Dict[str, Any]) -> Dict[str, Any]:
         """Nudge the active motion / compliance controller's target.
@@ -2241,6 +2318,98 @@ class DashboardNode(Node):
         pose.  Only valid for motion / compliance.
         """
         return self.api_jog({})  # zero delta == snap to current pose
+
+    def api_set_target_pose(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        """Publish an ABSOLUTE target pose to the active controller.
+
+        This is the endpoint the 3D drag-gizmo streams to: the operator
+        drags the end-effector handle in the viewer and every pose is sent
+        here.  Unlike :meth:`api_jog` (which nudges the current pose by a
+        delta), this sets the goal pose directly, so a gizmo drag maps 1:1
+        to the commanded target with no accumulation.
+
+        Body (either shape is accepted)::
+
+            {"position": {"x":.., "y":.., "z":..},
+             "orientation": {"x":.., "y":.., "z":.., "w":..},
+             "frame_id": "world"}          # optional; viewer render frame
+            {"xyz": [x, y, z], "quat": [w, x, y, z], "frame_id": "world"}
+
+        The pose is TF-transformed from ``frame_id`` (default = the active
+        controller's base frame) into that controller's ``robot_base_link``
+        before publishing, because the FZI controllers only accept a target
+        stamped in their own base frame.  Refused unless the active
+        controller's kind is ``motion`` or ``compliance``.
+        """
+        active = self._active_controller()
+        kind = self._active_kind()
+        if kind not in ("motion", "compliance"):
+            raise RuntimeError(
+                f"target pose is only supported for motion / compliance "
+                f"controllers; active is {active!r} (kind={kind!r})")
+
+        def _f(v: Any, default: float = 0.0) -> float:
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return float(default)
+
+        xyz = body.get("xyz")
+        if isinstance(xyz, (list, tuple)) and len(xyz) == 3:
+            px, py, pz = _f(xyz[0]), _f(xyz[1]), _f(xyz[2])
+        else:
+            pos = body.get("position") or {}
+            px, py, pz = _f(pos.get("x")), _f(pos.get("y")), _f(pos.get("z"))
+
+        quat = body.get("quat")
+        if isinstance(quat, (list, tuple)) and len(quat) == 4:
+            # gizmo/commander convention: [w, x, y, z]
+            qw, qx, qy, qz = (_f(quat[0], 1.0), _f(quat[1]),
+                              _f(quat[2]), _f(quat[3]))
+        else:
+            ori = body.get("orientation") or {}
+            qx, qy = _f(ori.get("x")), _f(ori.get("y"))
+            qz, qw = _f(ori.get("z")), _f(ori.get("w"), 1.0)
+        # Normalise defensively so a slightly non-unit quaternion from the
+        # browser doesn't skew the commanded orientation.
+        n = math.sqrt(qx * qx + qy * qy + qz * qz + qw * qw) or 1.0
+        qx, qy, qz, qw = qx / n, qy / n, qz / n, qw / n
+
+        base_frame, _tool = self._resolve_active_frames(active)
+        src_frame = (body.get("frame_id") or "").strip().strip("/") or base_frame
+
+        ps = PoseStamped()
+        ps.header.frame_id = src_frame
+        ps.header.stamp = self.get_clock().now().to_msg()
+        ps.pose.position.x = px
+        ps.pose.position.y = py
+        ps.pose.position.z = pz
+        ps.pose.orientation.x = qx
+        ps.pose.orientation.y = qy
+        ps.pose.orientation.z = qz
+        ps.pose.orientation.w = qw
+
+        out = self._transform_pose_to(ps, base_frame)
+        self._publish_target_pose(active, out)
+        return {
+            "ok": True,
+            "controller_name": active,
+            "kind": kind,
+            "target": {
+                "frame_id": out.header.frame_id,
+                "position": {
+                    "x": out.pose.position.x,
+                    "y": out.pose.position.y,
+                    "z": out.pose.position.z,
+                },
+                "orientation": {
+                    "x": out.pose.orientation.x,
+                    "y": out.pose.orientation.y,
+                    "z": out.pose.orientation.z,
+                    "w": out.pose.orientation.w,
+                },
+            },
+        }
 
     # ------------------------------------------------------------------
     # tool-frame offsets (aux_frames in robot_config.yaml)

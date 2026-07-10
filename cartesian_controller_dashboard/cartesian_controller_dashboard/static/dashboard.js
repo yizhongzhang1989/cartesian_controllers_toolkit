@@ -13,6 +13,11 @@
       : (hz < 10 ? hz.toFixed(1) : Math.round(hz).toString()) + " Hz";
 
   let snapshot = null;
+  // Last-known active controller kind + end_effector_link, cached from the
+  // full /api/state snapshot (the 200 ms /api/live tick omits them) so the 3D
+  // drag gizmo can be fed on every tick.
+  let gzKind = "";
+  let gzEe = "";
 
   async function api(path, opts) {
     const r = await fetch(path, opts || {});
@@ -229,6 +234,15 @@
     setControllerSelect(ctl);
     setOrchPill(s);
     setTcpPose(s);
+
+    // Feed the 3D direct-manipulation gizmo. kind / ee_frame only arrive on the
+    // full /api/state snapshot, so cache them; engaged arrives on every tick.
+    if (typeof s.controller_kind === "string") gzKind = s.controller_kind;
+    if (typeof s.ee_frame === "string" && s.ee_frame) gzEe = s.ee_frame;
+    if (window.__ccGizmo) {
+      window.__ccGizmo.update({
+        engaged: !!ctl.engaged, kind: gzKind, eeFrame: gzEe });
+    }
 
     const w = s.wrench;
     $("wfx").textContent = w ? fmt(w.fx) : "--";
@@ -494,6 +508,9 @@
     try {
       const r = await api("/api/snap_target", { method: "POST" });
       $("last-target-pos").textContent = fmtPos(r.target && r.target.position);
+      // Re-centre the drag gizmo on the freshly-held pose so it doesn't yank
+      // the robot on the next drag.
+      if (window.__ccGizmo) window.__ccGizmo.snapToEE();
       const kind = (r && r.kind) || "motion";
       toast(
         kind === "compliance"

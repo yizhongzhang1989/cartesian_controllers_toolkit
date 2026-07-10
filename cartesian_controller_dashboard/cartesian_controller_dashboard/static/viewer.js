@@ -15,6 +15,7 @@
 // viewer stays inert here, since this dashboard sends no aux frames.)
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { TransformControls } from "three/addons/controls/TransformControls.js";
 import { STLLoader } from "three/addons/loaders/STLLoader.js";
 import { ColladaLoader } from "three/addons/loaders/ColladaLoader.js";
 
@@ -742,6 +743,8 @@ async function poll() {
     if (s.has_meshes) ensureMeshes(s.visuals || []);
     ensureFrames(tf);
     window.__tipFrame = s.tip_frame || "";
+    // hand the render frame (target frame_id) to the drag gizmo
+    if (window.__ccOnState) window.__ccOnState(s);
     setTargetPose(tf);      // feed the smoother; the render loop eases + places the pose
     fitView(tf);
     if ($("n-links")) $("n-links").textContent = (s.links || []).length || "—";
@@ -775,6 +778,154 @@ if ($("vf-collapse")) $("vf-collapse").onclick = () => {
   const collapsed = f.classList.toggle("collapsed");
   b.textContent = collapsed ? "+" : "−";
   b.setAttribute("aria-expanded", String(!collapsed));
+};
+// ---- direct-manipulation drag gizmo (motion / compliance target pose) ----
+// A Three.js TransformControls handle on a VISIBLE "target proxy" frame placed
+// on the end-effector. Drag it (move / rotate) to command the active FZI
+// motion / compliance controller's target_frame -- the same direct-manipulation
+// UX as the ikt_pose_commander dashboard. The proxy does NOT follow the robot;
+// it is re-centred on the current EE when the gizmo first appears (or via Snap)
+// so the first drag doesn't jump. Everything is gated on ccVisible(): the
+// controller must be ENGAGED, its kind motion/compliance, AND the operator must
+// tick "Direct 3D drag" -- so the robot never moves from a stray click.
+const ccProxy = new THREE.Object3D();
+ccProxy.add(new THREE.AxesHelper(0.18));
+ccProxy.visible = false;
+scene.add(ccProxy);
+const ccGizmo = new TransformControls(camera, renderer.domElement);
+ccGizmo.setSize(0.9);
+ccGizmo.setSpace("local");   // handles align with the target / EE axes
+ccGizmo.attach(ccProxy);
+ccGizmo.enabled = false;
+ccGizmo.visible = false;
+scene.add(ccGizmo);
+
+let ccEnabled = false;    // operator toggle ("Direct 3D drag")
+let ccEngaged = false;    // controller engaged (from /api/state)
+let ccKind = "";          // active controller kind
+let ccEeFrame = "";       // active controller end_effector_link
+let ccRootFrame = "";     // viewer render frame (target frame_id; TF'd server-side)
+let _ccInit = false;      // proxy has been placed on the EE at least once
+let _ccWasVisible = false;
+let _ccLastSend = 0;      // last stream POST time (ms)
+let _ccPending = null;    // trailing pose to flush after the throttle window
+
+function ccVisible() {
+  return !!(ccEnabled && ccEngaged
+    && (ccKind === "motion" || ccKind === "compliance")
+    && ccEeFrame && window.__lastLinkTf && window.__lastLinkTf[ccEeFrame]);
+}
+
+// Re-centre the draggable frame on the controlled end-effector's live pose.
+function ccSnapToEE() {
+  const tf = window.__lastLinkTf;
+  if (!ccEeFrame || !tf || !tf[ccEeFrame]) return false;
+  rosMat(tf[ccEeFrame]).decompose(ccProxy.position, ccProxy.quaternion, ccProxy.scale);
+  ccProxy.scale.set(1, 1, 1);
+  ccProxy.updateMatrixWorld(true);
+  _ccInit = true;
+  invalidate();
+  return true;
+}
+
+function ccApplyVisibility() {
+  const vis = ccVisible();
+  if (vis && !_ccWasVisible) ccSnapToEE();   // seed on appear so first drag holds
+  _ccWasVisible = vis;
+  ccGizmo.enabled = vis;
+  ccGizmo.visible = vis;
+  ccProxy.visible = vis;
+  const hint = $("gizmo-hint");
+  if (hint) {
+    hint.textContent = vis
+      ? "drag the triad on the tool \u2014 move / rotate to command the target"
+      : (ccEnabled
+          ? "engage a motion / compliance controller to drag"
+          : "tick to grab the end-effector in 3D");
+  }
+  invalidate();
+}
+
+const _ccp = new THREE.Vector3(), _ccq = new THREE.Quaternion(), _ccs = new THREE.Vector3();
+function ccTargetBody() {
+  ccProxy.updateMatrixWorld(true);
+  ccProxy.matrixWorld.decompose(_ccp, _ccq, _ccs);
+  // three quaternion is (x,y,z,w); the backend wants [w,x,y,z]
+  return { xyz: [_ccp.x, _ccp.y, _ccp.z],
+           quat: [_ccq.w, _ccq.x, _ccq.y, _ccq.z],
+           frame_id: ccRootFrame || "" };
+}
+function ccPost(body) {
+  fetch("/api/target_pose", { method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body) }).catch(() => {});
+}
+// Stream drag poses at ~25 Hz with a trailing flush so the LAST pose of a drag
+// always lands even if it arrived inside the throttle window.
+function ccStream() {
+  if (!ccVisible()) return;
+  const now = performance.now();
+  const body = ccTargetBody();
+  if (now - _ccLastSend >= 40) {
+    _ccLastSend = now; _ccPending = null; ccPost(body);
+  } else {
+    _ccPending = body;
+    if (!ccStream._t) {
+      ccStream._t = setTimeout(() => {
+        ccStream._t = null;
+        if (_ccPending) {
+          _ccLastSend = performance.now();
+          const b = _ccPending; _ccPending = null; ccPost(b);
+        }
+      }, 45);
+    }
+  }
+}
+
+ccGizmo.addEventListener("dragging-changed", (e) => {
+  controls.enabled = !e.value;                 // don't orbit while dragging a handle
+  if (!e.value && ccVisible()) ccStream();      // flush the final pose on release
+});
+ccGizmo.addEventListener("objectChange", () => { if (ccVisible()) ccStream(); });
+ccGizmo.addEventListener("change", invalidate);
+
+function ccSetMode(mode) {
+  ccGizmo.setMode(mode);
+  const mv = $("gizmo-move"), ro = $("gizmo-rotate");
+  if (mv) mv.classList.toggle("sel", mode === "translate");
+  if (ro) ro.classList.toggle("sel", mode === "rotate");
+  invalidate();
+}
+if ($("gizmo-move")) $("gizmo-move").onclick = () => ccSetMode("translate");
+if ($("gizmo-rotate")) $("gizmo-rotate").onclick = () => ccSetMode("rotate");
+if ($("gizmo-enable")) $("gizmo-enable").addEventListener("change", (e) => {
+  ccEnabled = !!e.target.checked; _ccInit = false; ccApplyVisibility();
+});
+ccSetMode("translate");
+
+// Fed by dashboard.js on every /api/state + /api/live tick so the gizmo tracks
+// the engaged state / active controller without polling itself.
+window.__ccGizmo = {
+  update(st) {
+    if (!st) return;
+    if (typeof st.engaged === "boolean") ccEngaged = st.engaged;
+    if (typeof st.kind === "string") ccKind = st.kind;
+    if (typeof st.eeFrame === "string" && st.eeFrame) ccEeFrame = st.eeFrame;
+    ccApplyVisibility();
+  },
+  snapToEE: ccSnapToEE,
+  setEnabled(b) {
+    ccEnabled = !!b;
+    const cb = $("gizmo-enable"); if (cb) cb.checked = ccEnabled;
+    _ccInit = false; ccApplyVisibility();
+  },
+  setMode: ccSetMode,
+};
+// The viewer's own /api/viewer_state poll hands us the render frame (used as the
+// target frame_id; the backend TF-transforms it into the controller base link).
+window.__ccOnState = (s) => {
+  if (s && s.base_frame) ccRootFrame = s.base_frame;
+  if (ccVisible() && !_ccInit) ccSnapToEE();
 };
 poll(); setInterval(poll, 100);
 
