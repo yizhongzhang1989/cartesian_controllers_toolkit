@@ -310,6 +310,11 @@
         inp.min = "0.001";
         inp.title = "Virtual link mass in kg; must be greater than zero";
       }
+      if (p.name === "solver.forward_dynamics.link_inertia") {
+        inp.min = "0.001";
+        inp.title = "Virtual end-effector rotational inertia in kg\u00b7m\u00b2; " +
+          "the rotational counterpart of virtual mass; must be greater than zero";
+      }
       inp.value = (p.value == null) ? "" : p.value;
       inp.dataset.name = p.name;
       inp.dataset.kind = p.kind;
@@ -363,6 +368,10 @@
     if (name === "solver.forward_dynamics.link_mass" &&
         (!Number.isFinite(value) || value <= 0)) {
       toast("virtual mass must be greater than zero", "bad"); return;
+    }
+    if (name === "solver.forward_dynamics.link_inertia" &&
+        (!Number.isFinite(value) || value <= 0)) {
+      toast("virtual inertia must be greater than zero", "bad"); return;
     }
     try {
       const r = await api("/api/param", {

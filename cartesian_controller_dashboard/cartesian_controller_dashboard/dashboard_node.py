@@ -208,6 +208,7 @@ class _RateTracker:
 # matrix, which is the main parameter operators want to play with.
 # ---------------------------------------------------------------------------
 _VIRTUAL_MASS_PARAM = "solver.forward_dynamics.link_mass"
+_VIRTUAL_INERTIA_PARAM = "solver.forward_dynamics.link_inertia"
 _BASE_TUNABLES: List[Tuple[str, str]] = [
     # P (stiffness of the inner PD on the Cartesian error vector)
     ("pd_gains.trans_x.p", "double"),
@@ -228,6 +229,7 @@ _BASE_TUNABLES: List[Tuple[str, str]] = [
     ("solver.error_scale", "double"),
     ("solver.iterations",  "integer"),
     (_VIRTUAL_MASS_PARAM, "double"),
+    (_VIRTUAL_INERTIA_PARAM, "double"),
 ]
 _COMPLIANCE_EXTRAS: List[Tuple[str, str]] = [
     ("stiffness.trans_x", "double"),
@@ -1587,6 +1589,14 @@ class DashboardNode(Node):
             if not math.isfinite(value) or value <= 0.0:
                 raise RuntimeError(
                     "virtual mass must be finite and greater than zero")
+        if name == _VIRTUAL_INERTIA_PARAM:
+            try:
+                value = float(value)
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError("virtual inertia must be a number") from exc
+            if not math.isfinite(value) or value <= 0.0:
+                raise RuntimeError(
+                    "virtual inertia must be finite and greater than zero")
         active = self._active_controller()
         ok, why = self._set_param(active, name, kind, value)
         if not ok:

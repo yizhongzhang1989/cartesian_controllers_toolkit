@@ -385,8 +385,9 @@ Three things worth noting:
 `Base::computeJointControlCmds(F_cmd, 0.02s)` hands $\mathbf{F}_{\text{cmd}}$
 to the forward-dynamics solver in [`ForwardDynamicsSolver::getJointControlCmds`](../../external/cartesian_controllers/cartesian_controller_base/src/ForwardDynamicsSolver.cpp).
 The solver treats the robot as a fictitious rigid body with a custom
-inertia distribution (last link mass = 1 kg, inertia = 1 kg·m²; all
-other links use `solver.forward_dynamics.link_mass`, default 0.1 kg)
+inertia distribution (last link mass = 1 kg, rotational inertia =
+`solver.forward_dynamics.link_inertia`, default 1 kg·m²; all other
+links use `solver.forward_dynamics.link_mass`, default 0.1 kg)
 and integrates one step forward in 0.02 s using **symplectic (semi-implicit) Euler**:
 
 $$

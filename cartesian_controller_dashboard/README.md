@@ -30,6 +30,8 @@ responsibilities live in
   * `pd_gains.rot_x.d`, `pd_gains.rot_y.d`, `pd_gains.rot_z.d`
   * `solver.error_scale`, `solver.iterations`
   * `solver.forward_dynamics.link_mass` (finite and greater than zero)
+  * `solver.forward_dynamics.link_inertia` (rotational counterpart of
+    link_mass; finite and greater than zero)
   * `stiffness.trans_{x,y,z}`, `stiffness.rot_{x,y,z}` (compliance only)
 
   Edits are applied immediately via `SetParameters` on the controller
