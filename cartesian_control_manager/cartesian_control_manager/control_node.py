@@ -169,6 +169,12 @@ _PARAM_DECLARATIONS: List[Tuple[str, object]] = [
     ("target_wrench_torque_x",  0.0),   # Nm
     ("target_wrench_torque_y",  0.0),   # Nm
     ("target_wrench_torque_z",  0.0),   # Nm
+    # Frame the published target_wrench is stamped with (header.frame_id).
+    # Empty -> fall back to ``fzi_target_frame`` (legacy behaviour).  Whether
+    # the FZI force controller actually honours this frame_id depends on ITS
+    # own ``hand_frame_control`` param -- exposed here (live-tunable, e.g. from
+    # the dashboard frame dropdown) so an operator can select it and verify.
+    ("target_wrench_frame",      ""),
     # external high-rate target_wrench input -------------------------------
     # When ``external_target_wrench_topic`` is non-empty, the orchestrator
     # subscribes to it (BEST_EFFORT) and forwards every incoming message
@@ -431,6 +437,9 @@ class CartesianControlNode(Node):
             float(gp("target_wrench_torque_y")),
             float(gp("target_wrench_torque_z")),
         ], dtype=float)
+        # Frame stamped on the published target_wrench (see _wrench_frame).
+        # Empty -> falls back to fzi_target_frame.
+        self._target_wrench_frame = str(gp("target_wrench_frame"))
 
         # external high-rate target_wrench input --------------------------
         self._external_target_wrench_topic = str(
@@ -559,6 +568,11 @@ class CartesianControlNode(Node):
                 self.get_logger().info(
                     f"{p.name} -> {float(p.value):.4f} "
                     f"(target_wrench={self._target_wrench.tolist()})")
+            elif p.name == "target_wrench_frame":
+                self._target_wrench_frame = str(p.value)
+                self.get_logger().info(
+                    f"target_wrench_frame -> {self._target_wrench_frame!r} "
+                    f"(effective header.frame_id={self._wrench_frame()!r})")
             elif p.name == "external_target_wrench_timeout_sec":
                 self._external_target_wrench_timeout = float(p.value)
                 self.get_logger().info(
@@ -666,7 +680,7 @@ class CartesianControlNode(Node):
                 f"parameter setpoint suspended")
         msg_out = WrenchStamped()
         msg_out.header.stamp = self.get_clock().now().to_msg()
-        msg_out.header.frame_id = self._fzi_target_frame
+        msg_out.header.frame_id = self._wrench_frame()
         msg_out.wrench.force.x  = float(clamped[0])
         msg_out.wrench.force.y  = float(clamped[1])
         msg_out.wrench.force.z  = float(clamped[2])
@@ -688,6 +702,20 @@ class CartesianControlNode(Node):
                                -self._max_wrench_torque,
                                +self._max_wrench_torque)
         return out
+
+    def _wrench_frame(self) -> str:
+        """Frame stamped on the published ``target_wrench`` (header.frame_id).
+
+        Returns the configured ``target_wrench_frame`` VERBATIM -- empty when
+        unset.  An empty frame_id tells the (patched) FZI force controller to
+        keep its legacy ``hand_frame_control`` interpretation (end-effector
+        frame by default); a non-empty link name makes the controller rotate
+        the wrench from that link into the base frame.  We deliberately do NOT
+        fall back to ``fzi_target_frame`` here -- that is the MOTION target
+        frame and reusing it would silently change the force controller's
+        default frame.
+        """
+        return self._target_wrench_frame
 
     def _on_joint_states(self, msg: JointState) -> None:
         with self._lock:
@@ -862,7 +890,7 @@ class CartesianControlNode(Node):
             return  # per-message forward already published this tick
         msg = WrenchStamped()
         msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = self._fzi_target_frame
+        msg.header.frame_id = self._wrench_frame()
         tw = self._target_wrench
         msg.wrench.force.x = float(tw[0])
         msg.wrench.force.y = float(tw[1])
@@ -1089,6 +1117,8 @@ class CartesianControlNode(Node):
                     "joint_states_stale_after":  self._joint_states_stale_after,
                 },
                 "publish_target_wrench": self._publish_target_wrench,
+                "target_wrench_frame":   self._target_wrench_frame,
+                "target_wrench_frame_effective": self._wrench_frame(),
             }
         msg = String()
         msg.data = json.dumps(payload, separators=(",", ":"))

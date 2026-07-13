@@ -178,6 +178,19 @@
   #btn-tw-publish-toggle[data-enabled="?"]:hover { background: #3a4150; }
   #tw-publish-hint { flex: 1 1 220px; min-width: 0; }
 
+  /* Wrench frame_id selector -- which frame the published target_wrench
+     is stamped with (header.frame_id). */
+  .tw-frame-bar {
+    display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+    margin: 4px 0;
+    padding: 8px 10px;
+    background: #11141a;
+    border: 1px solid #232730;
+    border-radius: 6px;
+  }
+  #tw-frame { min-width: 160px; }
+  #tw-frame-msg { flex: 1 1 160px; min-width: 0; }
+
   /* ------------------------------------------------------------------
      Target-wrench sliders (force-controller commands).
 

@@ -60,6 +60,9 @@ cartesian_control_manager:
   target_wrench_torque_x: 0.0
   target_wrench_torque_y: 0.0
   target_wrench_torque_z: 0.0
+  # Frame the published target_wrench is stamped with (header.frame_id).
+  # "" -> fall back to fzi_target_frame. Selectable live from the dashboard.
+  target_wrench_frame: ""
   # external high-rate target_wrench input ("" = disabled)
   external_target_wrench_topic: ""
   external_target_wrench_timeout_sec: 0.2

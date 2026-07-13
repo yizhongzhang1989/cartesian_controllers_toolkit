@@ -116,6 +116,9 @@ _FALLBACKS = {
     "target_wrench_torque_x":  0.0,
     "target_wrench_torque_y":  0.0,
     "target_wrench_torque_z":  0.0,
+    # Frame the published target_wrench is stamped with (header.frame_id).
+    # "" -> fall back to fzi_target_frame. Selectable live from the dashboard.
+    "target_wrench_frame":     "",
     # external high-rate target_wrench input.  When non-empty, the
     # orchestrator subscribes BEST_EFFORT and forwards each incoming
     # WrenchStamped immediately (no rate limiting) to every consumer,

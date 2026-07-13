@@ -1259,12 +1259,84 @@
           setAxisValue(ax.name, ax.value);
         }
       }
+      // Reflect the orchestrator's target_wrench frame_id + the robot's
+      // link list into the dropdown.
+      populateTwFrames(r.frames || [], r.frame, r.frame_effective);
     } catch (e) {
       // GET failures are silent -- the slider just keeps showing
       // whatever values it had cached.  Toasting on every failed
       // 5 s poll would be noisy.
     }
   }
+
+  // ---- Wrench frame_id dropdown ----------------------------------------
+  // The orchestrator stamps every published target_wrench with a
+  // ``header.frame_id`` (its ``target_wrench_frame`` param).  An empty
+  // param means "fall back to fzi_target_frame"; we surface that as a
+  // "(default: <frame>)" option.  The rest of the options are the robot's
+  // link names, straight from /robot_description.  Whether the FZI force
+  // controller honours the frame depends on its ``hand_frame_control``
+  // param -- the operator uses this to select / verify the frame.
+  let twFrameUserEditing = false;
+  function populateTwFrames(frames, current, effective) {
+    const sel = $("tw-frame");
+    if (!sel || twFrameUserEditing) return;
+    const want = [""].concat((frames || []).filter((f) => f));
+    const have = Array.from(sel.options).map((o) => o.value);
+    const same = want.length === have.length &&
+      want.every((v, i) => v === have[i]);
+    if (!same) {
+      sel.innerHTML = "";
+      for (const f of want) {
+        const opt = document.createElement("option");
+        opt.value = f;
+        opt.textContent = (f === "")
+          ? (effective ? `(default: ${effective})` : "(default)")
+          : f;
+        sel.appendChild(opt);
+      }
+    } else {
+      const def = sel.querySelector('option[value=""]');
+      if (def) {
+        def.textContent = effective ? `(default: ${effective})` : "(default)";
+      }
+    }
+    const cur = (current == null) ? "" : String(current);
+    if (document.activeElement !== sel && sel.value !== cur) {
+      sel.value = cur;
+    }
+  }
+  async function setTargetWrenchFrame(frame) {
+    const msg = $("tw-frame-msg");
+    try {
+      const r = await api("/api/target_wrench_frame", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ frame: frame }),
+      });
+      if (msg) {
+        msg.textContent = r.ok
+          ? (frame ? `frame_id = ${frame}` : "frame_id = (default)")
+          : ("rejected: " + (r.reason || "(no reason)"));
+        msg.style.color = r.ok ? "" : "#ffb4b4";
+      }
+    } catch (e) {
+      if (msg) {
+        msg.textContent = "post failed: " + e.message;
+        msg.style.color = "#ffb4b4";
+      }
+    }
+  }
+  (function wireTwFrame() {
+    const sel = $("tw-frame");
+    if (!sel) return;
+    sel.addEventListener("focus", () => { twFrameUserEditing = true; });
+    sel.addEventListener("blur", () => { twFrameUserEditing = false; });
+    sel.addEventListener("change", () => {
+      twFrameUserEditing = false;
+      setTargetWrenchFrame(sel.value);
+    });
+  })();
 
   $("btn-tw-zero-all").addEventListener("click", () => {
     for (const ax of TW_AXES) setAxisValue(ax.name, 0.0);

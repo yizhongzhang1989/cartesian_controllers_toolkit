@@ -617,6 +617,12 @@ class _DashboardHandler(BaseHTTPRequestHandler):
                     200,
                     self._dashboard.api_set_target_wrench_publish(body))
                 return
+            if path == "/api/target_wrench_frame":
+                body = self._read_json_body() or {}
+                self._send_json(
+                    200,
+                    self._dashboard.api_set_target_wrench_frame(body))
+                return
             if path == "/api/wrench_deadband":
                 body = self._read_json_body() or {}
                 self._send_json(
@@ -1388,9 +1394,37 @@ class DashboardNode(Node):
         r = resp.results[0]
         return bool(r.successful), str(r.reason or "")
 
-    # ------------------------------------------------------------------
-    # active-controller helpers (cached from orchestrator state topic)
-    # ------------------------------------------------------------------
+    def _set_orchestrator_string(self, name: str, value: str
+                                 ) -> Tuple[bool, str]:
+        """Push a single ``string`` parameter to the orchestrator.
+
+        Returns ``(ok, reason)`` -- ``ok`` is True iff the service responded
+        AND the parameter was accepted; ``reason`` is the orchestrator's
+        verbatim rejection reason (empty on success).  Used by the
+        target_wrench frame dropdown.
+        """
+        if not self._cli_orchestrator_set_params.wait_for_service(
+                timeout_sec=0.2):
+            return False, (f"orchestrator set_parameters service "
+                           f"unavailable at {self._orchestrator_ns!r}")
+        p = Parameter()
+        p.name = name
+        pv = ParameterValue()
+        pv.type = ParameterType.PARAMETER_STRING
+        pv.string_value = str(value)
+        p.value = pv
+        req = SetParameters.Request()
+        req.parameters = [p]
+        resp = self._service_call_sync(
+            self._cli_orchestrator_set_params, req, self._service_timeout)
+        if resp is None:
+            return False, (f"no response within "
+                           f"{self._service_timeout:.1f}s")
+        if not resp.results:
+            return False, "set_parameters: empty results"
+        r = resp.results[0]
+        return bool(r.successful), str(r.reason or "")
+
     def _active_controller(self) -> str:
         """Return whichever controller the orchestrator currently
         considers *active* (settable param).  Falls back to the
@@ -1710,6 +1744,19 @@ class DashboardNode(Node):
     # 6-value JSON body via the existing ``_set_orchestrator_doubles``
     # helper (per-parameter results bubble up so the JS can surface a
     # rejection reason -- e.g. |value| > max_wrench_force).
+    def _candidate_frames(self) -> List[str]:
+        """Link names from the cached URDF -- the target_wrench frame options.
+
+        Ordered as parsed (root-first).  Empty until ``/robot_description``
+        arrives, in which case the dropdown falls back to whatever frame the
+        orchestrator currently reports.
+        """
+        with self._lock:
+            model = self._urdf_model
+        if not model:
+            return []
+        return [str(x) for x in (model.get("links") or [])]
+
     def api_get_target_wrench(self) -> Dict[str, Any]:
         """Return the orchestrator's current target_wrench setpoint.
 
@@ -1748,6 +1795,15 @@ class DashboardNode(Node):
             "max_wrench_force":  max_f,
             "max_wrench_torque": max_t,
             "axes":            items,
+            # Frame stamped on the published target_wrench (header.frame_id).
+            # ``frame`` is the raw param ("" = follow fzi_target_frame);
+            # ``frame_effective`` is what actually gets stamped; ``frames``
+            # are the selectable robot links.
+            "frame": (ctl.get("target_wrench_frame")
+                      if isinstance(ctl, dict) else None),
+            "frame_effective": (ctl.get("target_wrench_frame_effective")
+                                if isinstance(ctl, dict) else None),
+            "frames":          self._candidate_frames(),
             "message": ("orchestrator-owned target_wrench setpoint "
                         "(/cartesian_control_manager); republished to every "
                         "FZI controller's target_wrench topic at the "
@@ -1850,6 +1906,44 @@ class DashboardNode(Node):
             "message": (
                 f"orchestrator publish_target_wrench -> {raw}" if ok else
                 f"orchestrator rejected publish_target_wrench={raw}: "
+                f"{reason or '(no reason)'}"
+            ),
+        }
+
+    def api_set_target_wrench_frame(self, body: Dict[str, Any]
+                                    ) -> Dict[str, Any]:
+        """Set the frame the orchestrator stamps on the target_wrench.
+
+        Body shape::
+
+            {"frame": str}
+
+        The value becomes the ``header.frame_id`` of every published
+        ``target_wrench`` (both the heartbeat and the relayed external
+        wrench).  An empty string makes the orchestrator fall back to its
+        ``fzi_target_frame``.  Any string is accepted -- the operator may
+        deliberately try a non-standard frame to check whether the FZI
+        force controller honours ``frame_id`` (it interprets the wrench in
+        its base or hand frame per its own ``hand_frame_control`` param).
+        """
+        if not isinstance(body, dict):
+            raise RuntimeError("body must be a JSON object")
+        if "frame" not in body:
+            raise RuntimeError("body.frame is required (string)")
+        frame = body["frame"]
+        if not isinstance(frame, str):
+            raise RuntimeError("body.frame must be a string")
+        ok, reason = self._set_orchestrator_string(
+            "target_wrench_frame", frame)
+        return {
+            "ok":     ok,
+            "frame":  frame if ok else None,
+            "reason": reason,
+            "message": (
+                f"target_wrench frame_id -> {frame!r}"
+                + (" (falls back to fzi_target_frame)" if not frame else "")
+                if ok else
+                f"orchestrator rejected target_wrench_frame={frame!r}: "
                 f"{reason or '(no reason)'}"
             ),
         }

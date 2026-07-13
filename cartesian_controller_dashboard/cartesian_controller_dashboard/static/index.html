@@ -398,6 +398,18 @@
                 can drive them directly.
               </span>
             </div>
+            <!-- Frame the orchestrator stamps on the published target_wrench
+                 (header.frame_id).  The FZI force controller interprets the
+                 wrench in its base or hand frame per its own
+                 hand_frame_control param; this dropdown lets the operator
+                 pick / verify which frame the force is defined in.  Wired in
+                 dashboard.js :: setTargetWrenchFrame(). -->
+            <div class="tw-frame-bar">
+              <span class="small">wrench frame_id:</span>
+              <select id="tw-frame"
+                      title="frame the force/torque is expressed in"></select>
+              <span class="small" id="tw-frame-msg"></span>
+            </div>
             <div class="wrench-sliders" id="wrench-sliders">
               <!-- 6 rows (Fx, Fy, Fz, Tx, Ty, Tz) injected by JS so the
                    per-axis min/max can track the orchestrator's safety
